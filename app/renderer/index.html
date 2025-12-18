@@ -34,6 +34,13 @@
   </div>
 
   <script>
+    // Ensure Node-like global for webpack runtime that expects it
+    if (typeof window !== "undefined" && typeof window.global === "undefined") {
+      window.global = window;
+    }
+  </script>
+
+  <script>
     // Error handling
     window.addEventListener('error', (event) => {
       console.error('Renderer error:', event.error);

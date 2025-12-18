@@ -34,11 +34,11 @@ export const AISidePanel: React.FC<AISidePanelProps> = ({
 
   return (
     <>
-      <div className={`ai-panel ${isOpen ? 'open' : ''}`}>
-        <div className="ai-panel-header">
-          <h3 className="ai-panel-title">AI Assistant</h3>
+      <div className={`fixed top-0 right-0 h-full w-[380px] bg-white border-l border-gray-200 shadow-xl transform transition-transform duration-200 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+          <div className="text-base font-semibold text-gray-900">AI Assistant</div>
           <button
-            className="ai-panel-toggle"
+            className="w-8 h-8 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-100"
             onClick={onToggle}
             title="Toggle AI panel"
           >
@@ -46,19 +46,12 @@ export const AISidePanel: React.FC<AISidePanelProps> = ({
           </button>
         </div>
 
-        <div className="ai-panel-content">
-          <div className="ai-input-area">
+        <div className="p-4 flex flex-col h-[calc(100%-56px)]">
+          <div className="space-y-3">
             <select
+              className="w-full h-10 border border-gray-300 rounded-md px-2 text-sm"
               value={requestType}
               onChange={(e) => setRequestType(e.target.value as AIRequest['type'])}
-              style={{
-                width: '100%',
-                padding: '8px',
-                marginBottom: '8px',
-                border: '1px solid #ced4da',
-                borderRadius: '4px',
-                fontSize: '14px'
-              }}
             >
               <option value="chat">Chat</option>
               <option value="summarize">Summarize Page</option>
@@ -68,7 +61,7 @@ export const AISidePanel: React.FC<AISidePanelProps> = ({
 
             <form onSubmit={handleSubmit}>
               <textarea
-                className="ai-textarea"
+                className="w-full min-h-[90px] border border-gray-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder={
@@ -85,23 +78,23 @@ export const AISidePanel: React.FC<AISidePanelProps> = ({
             </form>
           </div>
 
-          <div className="ai-action-buttons">
+          <div className="flex gap-2 mt-3">
             <button
-              className="ai-btn"
+              className="flex-1 h-9 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50"
               onClick={() => handleQuickAction('summarize')}
               disabled={isProcessing}
             >
               📝 Summarize
             </button>
             <button
-              className="ai-btn"
+              className="flex-1 h-9 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50"
               onClick={() => handleQuickAction('analyze')}
               disabled={isProcessing}
             >
               🔍 Analyze
             </button>
             <button
-              className="ai-btn"
+              className="flex-1 h-9 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50"
               onClick={() => handleQuickAction('extract')}
               disabled={isProcessing}
             >
@@ -109,44 +102,39 @@ export const AISidePanel: React.FC<AISidePanelProps> = ({
             </button>
           </div>
 
-          {isProcessing && (
-            <div className="ai-loading">
-              <div>Processing...</div>
-            </div>
-          )}
+          <div className="flex-1 mt-4 overflow-auto">
+            {isProcessing && (
+              <div className="text-sm text-gray-600">Processing...</div>
+            )}
 
-          {currentResponse && (
-            <div className="ai-response">
-              {currentResponse.error ? (
-                <div style={{ color: '#dc3545' }}>
-                  Error: {currentResponse.error}
-                </div>
-              ) : (
-                <div>
-                  {currentResponse.content}
-                  {currentResponse.metadata && (
-                    <div style={{
-                      marginTop: '8px',
-                      fontSize: '12px',
-                      color: '#6c757d',
-                      borderTop: '1px solid #e0e0e0',
-                      paddingTop: '8px'
-                    }}>
-                      {currentResponse.metadata.model && (
-                        <div>Model: {currentResponse.metadata.model}</div>
-                      )}
-                      {currentResponse.metadata.processingTime && (
-                        <div>Time: {Math.round(currentResponse.metadata.processingTime)}ms</div>
-                      )}
-                      {currentResponse.metadata.tokens && (
-                        <div>Tokens: {currentResponse.metadata.tokens}</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+            {currentResponse && (
+              <div className="text-sm bg-gray-50 border border-gray-200 rounded-md p-3 space-y-2">
+                {currentResponse.error ? (
+                  <div className="text-red-600">
+                    Error: {currentResponse.error}
+                  </div>
+                ) : (
+                  <div className="text-gray-800 whitespace-pre-wrap">
+                    {currentResponse.content}
+                  </div>
+                )}
+
+                {currentResponse.metadata && (
+                  <div className="pt-2 border-t border-gray-200 text-xs text-gray-500 space-y-1">
+                    {currentResponse.metadata.model && (
+                      <div>Model: {currentResponse.metadata.model}</div>
+                    )}
+                    {currentResponse.metadata.processingTime && (
+                      <div>Time: {Math.round(currentResponse.metadata.processingTime)}ms</div>
+                    )}
+                    {currentResponse.metadata.tokens && (
+                      <div>Tokens: {currentResponse.metadata.tokens}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </>

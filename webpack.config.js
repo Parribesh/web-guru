@@ -6,6 +6,8 @@ module.exports = {
   entry: './app/renderer/index.tsx',
   target: 'electron-renderer',
   devtool: 'source-map',
+  // Bundle Node core/polyfill deps (avoid runtime require in browser context)
+  externalsPresets: { node: false },
   module: {
     rules: [
       {
@@ -30,6 +32,9 @@ module.exports = {
   },
   resolve: {
     extensions: ['.tsx', '.ts', '.js'],
+    fallback: {
+      events: require.resolve('events/'),
+    },
   },
   output: {
     filename: 'renderer.js',

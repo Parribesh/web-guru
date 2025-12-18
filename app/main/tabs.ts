@@ -4,6 +4,23 @@ import { Tab } from '../shared/types';
 import { createBrowserView, updateBrowserViewBounds } from './windows';
 import * as path from 'path';
 
+const BROWSER_UI_HEIGHT = 40; // space for top title bar only
+const VIEWPORT_RATIO = 0.5; // left half for page, right half for agent/chat
+
+function setViewBounds(mainWindow: BrowserWindow, view: BrowserView) {
+  // Use content bounds (excludes frame/title) to size the view
+  const { width, height } = mainWindow.getContentBounds();
+  const availableHeight = Math.max(0, height - BROWSER_UI_HEIGHT);
+  const viewportWidth = Math.max(0, Math.floor(width * VIEWPORT_RATIO));
+
+  updateBrowserViewBounds(view, {
+    x: 0,
+    y: BROWSER_UI_HEIGHT,
+    width: viewportWidth,
+    height: availableHeight,
+  });
+}
+
 export class TabManager {
   private tabs: Map<string, Tab> = new Map();
   private views: Map<string, BrowserView> = new Map();
@@ -13,7 +30,7 @@ export class TabManager {
 
   constructor(mainWindow: BrowserWindow) {
     this.mainWindow = mainWindow;
-    this.preloadPath = path.join(__dirname, '../preload/preload/index.js');
+    this.preloadPath = path.join(__dirname, '../../preload/preload/index.js');
 
     // Create initial tab
     this.createTab();
@@ -38,6 +55,7 @@ export class TabManager {
 
     // Add view to window but don't show yet
     this.mainWindow.addBrowserView(view);
+    setViewBounds(this.mainWindow, view);
 
     // If this is the first tab, make it active
     if (!this.activeTabId) {
@@ -94,15 +112,7 @@ export class TabManager {
     if (newView) {
       this.mainWindow.addBrowserView(newView);
       this.activeTabId = tabId;
-
-      // Update view bounds to fill window
-      const [width, height] = this.mainWindow.getSize();
-      updateBrowserViewBounds(newView, {
-        x: 0,
-        y: 80, // Leave space for UI
-        width,
-        height: height - 80
-      });
+      setViewBounds(this.mainWindow, newView);
     }
 
     return true;
@@ -191,12 +201,7 @@ export class TabManager {
     if (this.activeTabId) {
       const view = this.views.get(this.activeTabId);
       if (view) {
-        updateBrowserViewBounds(view, {
-          x: 0,
-          y: 80,
-          width,
-          height: height - 80
-        });
+        setViewBounds(this.mainWindow, view);
       }
     }
   }

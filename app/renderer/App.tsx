@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { TabBar } from './components/TabBar';
 import { AddressBar } from './components/AddressBar';
 import { AISidePanel } from './ai-ui/AISidePanel';
+import { AIChatPanel } from './ai-ui/AIChatPanel';
 import { CommandPalette } from './ai-ui/CommandPalette';
 import { Tab, AIRequest, AIResponse } from '../shared/types';
-import './App.css';
+import './index.css';
 
 declare global {
   interface Window {
@@ -52,9 +53,15 @@ const App: React.FC = () => {
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [currentAIResponse, setCurrentAIResponse] = useState<AIResponse | null>(null);
   const [isAIProcessing, setIsAIProcessing] = useState(false);
+  const [chatByTab, setChatByTab] = useState<Record<string, { from: 'user' | 'ai'; content: string }[]>>({});
 
   // Initialize tabs on mount
   useEffect(() => {
+    if (!window.electronAPI) {
+      console.error('electronAPI not available (preload not loaded?)');
+      return;
+    }
+
     const initializeTabs = async () => {
       try {
         const { tabs: initialTabs, activeTabId: initialActiveTabId } =
@@ -118,6 +125,9 @@ const App: React.FC = () => {
     try {
       await window.electronAPI.tabs.switch(tabId);
       setActiveTabId(tabId);
+      if (!chatByTab[tabId]) {
+        setChatByTab(prev => ({ ...prev, [tabId]: [] }));
+      }
     } catch (error) {
       console.error('Failed to switch tab:', error);
     }
@@ -140,6 +150,7 @@ const App: React.FC = () => {
       const result = await window.electronAPI.tabs.create();
       setTabs(result.tabs);
       setActiveTabId(result.tabId);
+      setChatByTab(prev => ({ ...prev, [result.tabId]: [] }));
     } catch (error) {
       console.error('Failed to create tab:', error);
     }
@@ -195,7 +206,14 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAIRequest = async (request: AIRequest) => {
+  const appendChat = (tabId: string, from: 'user' | 'ai', content: string) => {
+    setChatByTab(prev => ({
+      ...prev,
+      [tabId]: [...(prev[tabId] || []), { from, content }]
+    }));
+  };
+
+  const handleAIRequest = async (request: AIRequest): Promise<AIResponse | null> => {
     setIsAIProcessing(true);
     setCurrentAIResponse(null);
 
@@ -213,6 +231,14 @@ const App: React.FC = () => {
 
       const response = await window.electronAPI.ai.request(enhancedRequest);
       setCurrentAIResponse(response);
+      if (activeTabId) {
+        if (response.success) {
+          appendChat(activeTabId, 'ai', response.content);
+        } else if (response.error) {
+          appendChat(activeTabId, 'ai', `Error: ${response.error}`);
+        }
+      }
+      return response;
     } catch (error) {
       console.error('AI request failed:', error);
       setCurrentAIResponse({
@@ -220,45 +246,74 @@ const App: React.FC = () => {
         content: '',
         error: 'AI service unavailable'
       });
+      if (activeTabId) {
+        appendChat(activeTabId, 'ai', 'Error: AI service unavailable');
+      }
+      return {
+        success: false,
+        content: '',
+        error: 'AI service unavailable'
+      };
     } finally {
       setIsAIProcessing(false);
     }
   };
 
+  const handleChatSend = async (text: string): Promise<AIResponse | null> => {
+    if (!activeTabId) return null;
+    appendChat(activeTabId, 'user', text);
+    const request: AIRequest = { type: 'chat', content: text };
+    return handleAIRequest(request);
+  };
+
   const activeTab = tabs.find(tab => tab.id === activeTabId);
+  const activeChat = activeTabId ? chatByTab[activeTabId] || [] : [];
 
   return (
-    <div className="app">
-      <div className="title-bar">
-        <div className="window-controls">
-          <button onClick={() => window.electronAPI.window.minimize()} className="window-btn minimize">─</button>
-          <button onClick={() => window.electronAPI.window.maximize()} className="window-btn maximize">□</button>
-          <button onClick={() => window.electronAPI.window.close()} className="window-btn close">✕</button>
+    <div className="flex flex-col h-screen bg-gray-50">
+      <div className="h-8 bg-gray-100 border-b border-gray-200 flex items-center justify-end px-2 select-none">
+        <div className="flex space-x-1">
+          <button onClick={() => window.electronAPI.window.minimize()} className="w-10 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-200 rounded">─</button>
+          <button onClick={() => window.electronAPI.window.maximize()} className="w-10 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-200 rounded">□</button>
+          <button onClick={() => window.electronAPI.window.close()} className="w-10 h-8 flex items-center justify-center text-red-600 hover:bg-red-100 rounded">✕</button>
         </div>
       </div>
 
-      <TabBar
-        tabs={tabs}
-        activeTabId={activeTabId || ''}
-        onTabClick={handleTabClick}
-        onTabClose={handleTabClose}
-        onNewTab={handleNewTab}
-      />
+      <div className="flex flex-1 min-h-0 bg-gray-100">
+        <div className="flex-1 relative min-w-0 bg-black">
+          <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-xs pointer-events-none">
+            Browser View (Electron) overlays this area
+          </div>
+        </div>
 
-      <AddressBar
-        url={activeTab?.url || ''}
-        isLoading={activeTab?.isLoading || false}
-        canGoBack={activeTab?.canGoBack || false}
-        canGoForward={activeTab?.canGoForward || false}
-        onNavigate={handleNavigate}
-        onBack={handleBack}
-        onForward={handleForward}
-        onReload={handleReload}
-        onStop={handleStop}
-      />
+        <div className="w-[420px] min-w-[360px] max-w-[520px] flex flex-col bg-white border-l border-gray-200">
+          <TabBar
+            tabs={tabs}
+            activeTabId={activeTabId || ''}
+            onTabClick={handleTabClick}
+            onTabClose={handleTabClose}
+            onNewTab={handleNewTab}
+          />
 
-      <div className="browser-content">
-        {/* BrowserView will be rendered here by Electron */}
+          <AddressBar
+            url={activeTab?.url || ''}
+            isLoading={activeTab?.isLoading || false}
+            canGoBack={activeTab?.canGoBack || false}
+            canGoForward={activeTab?.canGoForward || false}
+            onNavigate={handleNavigate}
+            onBack={handleBack}
+            onForward={handleForward}
+            onReload={handleReload}
+            onStop={handleStop}
+          />
+
+          <AIChatPanel
+            messages={activeChat}
+            onSend={handleChatSend}
+            isProcessing={isAIProcessing}
+            hasActiveTab={!!activeTabId}
+          />
+        </div>
       </div>
 
       <AISidePanel

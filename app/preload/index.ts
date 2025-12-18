@@ -1,5 +1,11 @@
-import { contextBridge, ipcRenderer } from 'electron';
-import { IPCChannels, AIRequest, AIResponse, Tab } from '../shared/types';
+/// <reference lib="dom" />
+/// <reference lib="dom.iterable" />
+/* eslint-env browser */
+/* global window, document */
+import { contextBridge, ipcRenderer } from "electron";
+// Explicit .js extension to ensure Node resolves built file at runtime
+// Explicit .js extension so runtime can resolve built file in dist/preload/shared
+import { IPCChannels, AIRequest, AIResponse, Tab } from "../shared/types.js";
 
 // Security: Only expose specific, safe APIs to the renderer
 const electronAPI = {
@@ -7,17 +13,21 @@ const electronAPI = {
   tabs: {
     create: (url?: string) => ipcRenderer.invoke(IPCChannels.CREATE_TAB, url),
     close: (tabId: string) => ipcRenderer.invoke(IPCChannels.CLOSE_TAB, tabId),
-    switch: (tabId: string) => ipcRenderer.invoke(IPCChannels.SWITCH_TAB, tabId),
-    getAll: () => ipcRenderer.invoke('get-tabs'),
+    switch: (tabId: string) =>
+      ipcRenderer.invoke(IPCChannels.SWITCH_TAB, tabId),
+    getAll: () => ipcRenderer.invoke("get-tabs"),
   },
 
   // Navigation
   navigation: {
-    go: (tabId: string, url: string) => ipcRenderer.invoke(IPCChannels.NAVIGATE, tabId, url),
+    go: (tabId: string, url: string) =>
+      ipcRenderer.invoke(IPCChannels.NAVIGATE, tabId, url),
     back: (tabId: string) => ipcRenderer.invoke(IPCChannels.GO_BACK, tabId),
-    forward: (tabId: string) => ipcRenderer.invoke(IPCChannels.GO_FORWARD, tabId),
+    forward: (tabId: string) =>
+      ipcRenderer.invoke(IPCChannels.GO_FORWARD, tabId),
     reload: (tabId: string) => ipcRenderer.invoke(IPCChannels.RELOAD, tabId),
-    stop: (tabId: string) => ipcRenderer.invoke(IPCChannels.STOP_LOADING, tabId),
+    stop: (tabId: string) =>
+      ipcRenderer.invoke(IPCChannels.STOP_LOADING, tabId),
   },
 
   // AI services
@@ -35,7 +45,8 @@ const electronAPI = {
 
   // Dev tools
   devTools: {
-    open: (tabId?: string) => ipcRenderer.invoke(IPCChannels.OPEN_DEV_TOOLS, tabId),
+    open: (tabId?: string) =>
+      ipcRenderer.invoke(IPCChannels.OPEN_DEV_TOOLS, tabId),
   },
 
   // DOM content extraction
@@ -50,7 +61,7 @@ const electronAPI = {
 
     getSelectedText: (): string => {
       const selection = window.getSelection();
-      return selection ? selection.toString() : '';
+      return selection ? selection.toString() : "";
     },
 
     getPageInfo: () => ({
@@ -64,13 +75,13 @@ const electronAPI = {
   on: (channel: string, callback: (...args: any[]) => void) => {
     // Security: Only allow specific channels
     const allowedChannels = [
-      'tab:update',
-      'tab:created',
-      'tab:closed',
-      'ai:response',
-      'dom:extract',
-      'command-palette:toggle',
-      'ai:toggle-panel',
+      "tab:update",
+      "tab:created",
+      "tab:closed",
+      "ai:response",
+      "dom:extract",
+      "command-palette:toggle",
+      "ai:toggle-panel",
     ];
 
     if (allowedChannels.includes(channel)) {
@@ -84,12 +95,12 @@ const electronAPI = {
 
   // Send app events to main process
   sendAppEvent: (eventType: string, data: any) => {
-    ipcRenderer.send('app-event', eventType, data);
+    ipcRenderer.send("app-event", eventType, data);
   },
 };
 
 // Expose the API to the renderer process
-contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+contextBridge.exposeInMainWorld("electronAPI", electronAPI);
 
 // DOM content extraction functions
 function extractPageContent(): string {
@@ -97,54 +108,55 @@ function extractPageContent(): string {
   const clonedDoc = document.cloneNode(true) as Document;
 
   // Remove scripts and styles
-  const scripts = clonedDoc.querySelectorAll('script, style, noscript');
-  scripts.forEach(el => el.remove());
+  const scripts = clonedDoc.querySelectorAll("script, style, noscript");
+  scripts.forEach((el: any) => (el as any).remove());
 
   // Extract text content from meaningful elements
   const contentSelectors = [
-    'article',
-    'main',
+    "article",
+    "main",
     '[role="main"]',
-    '.content',
-    '.post',
-    '.article',
-    'p',
-    'h1',
-    'h2',
-    'h3',
-    'h4',
-    'h5',
-    'h6',
-    'li',
-    'blockquote'
+    ".content",
+    ".post",
+    ".article",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "blockquote",
   ];
 
-  let content = '';
+  let content = "";
 
-  contentSelectors.forEach(selector => {
-    const elements = clonedDoc.querySelectorAll(selector);
-    elements.forEach(el => {
-      const text = el.textContent?.trim();
-      if (text && text.length > 20) { // Only include substantial text
-        content += text + '\n\n';
+  contentSelectors.forEach((selector) => {
+    const elements = clonedDoc.querySelectorAll(selector) as any;
+    elements.forEach((el: any) => {
+      const text = (el.textContent as string | null)?.trim();
+      if (text && text.length > 20) {
+        // Only include substantial text
+        content += text + "\n\n";
       }
     });
   });
 
   // Fallback to body text if no structured content found
   if (!content.trim()) {
-    content = clonedDoc.body?.textContent || '';
+    content = (clonedDoc as any).body?.textContent || "";
   }
 
   // Clean up whitespace
   return content
-    .replace(/\s+/g, ' ')
-    .replace(/\n\s*\n/g, '\n\n')
+    .replace(/\s+/g, " ")
+    .replace(/\n\s*\n/g, "\n\n")
     .trim();
 }
 
 // Auto-extract content when page loads (for AI analysis)
-window.addEventListener('load', async () => {
+window.addEventListener("load", async () => {
   try {
     const content = extractPageContent();
     const pageInfo = electronAPI.dom.getPageInfo();
@@ -157,28 +169,28 @@ window.addEventListener('load', async () => {
       title: pageInfo.title,
     });
   } catch (error) {
-    console.error('Failed to extract DOM content:', error);
+    console.error("Failed to extract DOM content:", error);
   }
 });
 
 // Helper function to get current tab ID (placeholder)
 function getCurrentTabId(): string {
   // TODO: Implement proper tab ID tracking
-  return 'current-tab';
+  return "current-tab";
 }
 
 // Handle keyboard shortcuts
-document.addEventListener('keydown', (event) => {
+document.addEventListener("keydown", (event: any) => {
   // Command palette shortcut
-  if ((event.ctrlKey || event.metaKey) && event.key === 'k') {
+  if ((event.ctrlKey || event.metaKey) && event.key === "k") {
     event.preventDefault();
-    ipcRenderer.send('command-palette:toggle');
+    ipcRenderer.send("command-palette:toggle");
   }
 
   // AI panel toggle
-  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'A') {
+  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === "A") {
     event.preventDefault();
-    ipcRenderer.send('ai:toggle-panel');
+    ipcRenderer.send("ai:toggle-panel");
   }
 });
 

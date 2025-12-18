@@ -140,11 +140,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   return (
     <>
-      <div className="command-palette-overlay open" onClick={onClose} />
-      <div className="command-palette open">
+      <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
+      <div className="fixed z-50 top-[20%] left-1/2 -translate-x-1/2 w-[600px] max-w-[90vw] bg-white rounded-lg shadow-2xl">
         <input
           type="text"
-          className="command-input"
+          className="w-full px-4 py-3 border-b border-gray-200 text-base focus:outline-none"
           placeholder="Type a command..."
           value={query}
           onChange={(e) => {
@@ -154,30 +154,27 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           autoFocus
         />
 
-        <div className="command-list">
+        <div className="max-h-[320px] overflow-y-auto">
           {filteredCommands.map((command, index) => (
             <div
               key={command.id}
-              className={`command-item ${index === selectedIndex ? 'selected' : ''}`}
+              className={`px-4 py-3 border-b border-gray-100 flex items-center justify-between cursor-pointer transition ${
+                index === selectedIndex ? 'bg-gray-100' : 'hover:bg-gray-50'
+              }`}
               onClick={() => onCommand(command)}
             >
-              <div className="command-info">
-                <div className="command-title">{command.label}</div>
-                <div className="command-description">{command.description || ''}</div>
+              <div className="flex-1">
+                <div className="text-sm font-medium text-gray-900">{command.label}</div>
+                <div className="text-xs text-gray-500 mt-0.5">{command.description || ''}</div>
               </div>
               {command.shortcut && (
-                <div className="command-shortcut">{command.shortcut}</div>
+                <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{command.shortcut}</div>
               )}
             </div>
           ))}
 
           {filteredCommands.length === 0 && (
-            <div className="command-item">
-              <div className="command-info">
-                <div className="command-title">No commands found</div>
-                <div className="command-description">Try a different search term</div>
-              </div>
-            </div>
+            <div className="px-4 py-3 text-sm text-gray-500">No commands found. Try a different search term.</div>
           )}
         </div>
       </div>

@@ -13,6 +13,7 @@ export function createMainWindow(): BrowserWindow {
       contextIsolation: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
+      preload: path.join(__dirname, '../../preload/preload/index.js'),
     },
     show: false, // Don't show until ready
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
@@ -23,7 +24,8 @@ export function createMainWindow(): BrowserWindow {
   const isDev = process.env.NODE_ENV === 'development';
   if (isDev) {
     mainWindow.loadURL('http://localhost:3000');
-    mainWindow.webContents.openDevTools();
+    // Detach devtools so BrowserView doesn't cover the docked console
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '../../renderer/index.html'));
   }
@@ -51,19 +53,24 @@ export function createBrowserView(tab: Tab, preloadPath: string): BrowserView {
       webSecurity: true,
       partition: `persist:${tab.id}`, // Isolated session per tab
       preload: preloadPath,
-      sandbox: true, // Extra security layer
+        sandbox: false, // Allow preload to access node for IPC glue
     }
   });
 
   // Set bounds (will be updated by renderer)
-  view.setBounds({ x: 0, y: 80, width: 1200, height: 720 }); // Leave space for UI
+  const { width, height } = view.webContents.getOwnerBrowserWindow().getContentBounds();
+  const viewportWidth = Math.max(0, Math.floor(width * 0.5));
+  const topOffset = 40;
+  const availableHeight = Math.max(0, height - topOffset);
+  view.setBounds({ x: 0, y: topOffset, width: viewportWidth, height: availableHeight }); // Left half for page
+  view.setBackgroundColor('#000000');
 
   // Load initial URL
   if (tab.url) {
     view.webContents.loadURL(tab.url);
   } else {
-    // Load default new tab page
-    view.webContents.loadURL('data:text/html,<html><body><h1>New Tab</h1></body></html>');
+    // Start blank; React chrome owns the UI
+    view.webContents.loadURL('about:blank');
   }
 
   // Handle page loading events

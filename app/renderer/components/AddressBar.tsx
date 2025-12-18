@@ -34,9 +34,9 @@ export const AddressBar: React.FC<AddressBarProps> = ({
   };
 
   return (
-    <div className="address-bar">
+    <div className="h-12 bg-white border-b border-gray-200 flex items-center px-4 gap-2">
       <button
-        className="nav-btn"
+        className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 disabled:opacity-50 flex items-center justify-center hover:bg-gray-200"
         onClick={onBack}
         disabled={!canGoBack}
         title="Go back"
@@ -45,7 +45,7 @@ export const AddressBar: React.FC<AddressBarProps> = ({
       </button>
 
       <button
-        className="nav-btn"
+        className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 disabled:opacity-50 flex items-center justify-center hover:bg-gray-200"
         onClick={onForward}
         disabled={!canGoForward}
         title="Go forward"
@@ -54,23 +54,30 @@ export const AddressBar: React.FC<AddressBarProps> = ({
       </button>
 
       <button
-        className="nav-btn"
+        className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200"
         onClick={isLoading ? onStop : onReload}
         title={isLoading ? 'Stop loading' : 'Reload'}
       >
         {isLoading ? '✕' : '↻'}
       </button>
 
-      <form onSubmit={handleSubmit} style={{ flex: 1, display: 'flex' }}>
+      <form onSubmit={handleSubmit} className="flex-1 flex gap-2">
         <input
           type="text"
-          className="url-input"
+          className="w-full h-10 px-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Search or enter URL"
           spellCheck={false}
         />
+        <button
+          type="submit"
+          className="px-4 h-10 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          title="Load URL"
+        >
+          Fetch
+        </button>
       </form>
     </div>
   );
