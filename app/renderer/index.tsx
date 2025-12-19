@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
-import './App.css';
+import './index.css';
 
 // Provide a browser-safe global for modules that expect Node's global
 (window as any).global = window;

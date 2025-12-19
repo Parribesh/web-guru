@@ -88,10 +88,10 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
       }
     };
 
-    window.electronAPI.on('log:event', handleLogEvent);
+    ((window as any).electronAPI as any)?.on('log:event', handleLogEvent);
 
     return () => {
-      window.electronAPI.off('log:event', handleLogEvent);
+      ((window as any).electronAPI as any)?.off('log:event', handleLogEvent);
       // Clear all timeouts
       progressTimeoutRef.current.forEach(timeout => clearTimeout(timeout));
       progressTimeoutRef.current.clear();
@@ -125,25 +125,27 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
   };
 
   return (
-    <div className="ai-chat">
-      <div className="ai-chat__header">
-        <div>
-          <div className="ai-chat__title">AI Copilot</div>
-          <div className="ai-chat__subtitle">Plan, browse, and fill forms</div>
+    <div className="flex flex-col h-full bg-white">
+      <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-semibold text-gray-900 text-sm">AI Copilot</div>
+            <div className="text-xs text-gray-500 mt-0.5">Plan, browse, and fill forms</div>
+          </div>
+          <button
+            className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+            onClick={handleNewTask}
+            disabled={!hasActiveTab || isProcessing}
+            title="Start a new task (clear conversation)"
+          >
+            New task
+          </button>
         </div>
-        <button
-          className="ai-chat__action"
-          onClick={handleNewTask}
-          disabled={!hasActiveTab || isProcessing}
-          title="Start a new task (clear conversation)"
-        >
-          New task
-        </button>
       </div>
 
-      <div className="ai-chat__body space-y-2 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
         {messages.length === 0 && (
-          <div className="ai-chat__placeholder">
+          <div className="flex items-center justify-center h-full text-center text-gray-500 text-sm">
             Conversation will appear here. Ask the agent to navigate, extract data,
             fill forms, or book a flight.
           </div>
@@ -232,27 +234,29 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
         )}
       </div>
 
-      <div className="ai-chat__composer">
-        <input
-          className="ai-chat__input"
-          placeholder="Ask the AI to browse or perform a task..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          disabled={!hasActiveTab || isProcessing}
-        />
-        <button
-          className="ai-chat__send disabled:opacity-50"
-          onClick={handleSend}
-          disabled={!hasActiveTab || isProcessing}
-        >
-          Send
-        </button>
+      <div className="px-4 py-3 border-t border-gray-200 bg-white">
+        <div className="flex gap-2">
+          <input
+            className="flex-1 px-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
+            placeholder="Ask the AI to browse or perform a task..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            disabled={!hasActiveTab || isProcessing}
+          />
+          <button
+            className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={handleSend}
+            disabled={!hasActiveTab || isProcessing || !input.trim()}
+          >
+            Send
+          </button>
+        </div>
       </div>
     </div>
   );

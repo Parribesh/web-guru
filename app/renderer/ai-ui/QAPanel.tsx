@@ -31,7 +31,7 @@ export const QAPanel: React.FC<QAPanelProps> = ({ tabId, pageTitle, pageUrl }) =
         },
       };
 
-      const qaResponse = await (window.electronAPI as any).qa.ask(request);
+      const qaResponse = await ((window as any).electronAPI?.qa?.ask(request) || Promise.resolve(null));
       setResponse(qaResponse);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to get answer');

@@ -1,398 +1,297 @@
-import React, { useState, useEffect } from 'react';
-import { TabBar } from './components/TabBar';
-import { AddressBar } from './components/AddressBar';
-import { AISidePanel } from './ai-ui/AISidePanel';
-import { AIChatPanel } from './ai-ui/AIChatPanel';
-import { CommandPalette } from './ai-ui/CommandPalette';
-import { QAPanel } from './ai-ui/QAPanel';
-import { EventLog } from './components/EventLog';
-import { EmbeddingProgress } from './components/EmbeddingProgress';
-import { Tab, AIRequest, AIResponse } from '../shared/types';
-import './index.css';
+import React, { useState, useEffect } from "react";
+import { SessionList } from "./components/SessionList";
+import { SessionView } from "./components/SessionView";
 
-declare global {
-  interface Window {
-    electronAPI: {
-      tabs: {
-        create: (url?: string) => Promise<{ tabId: string; tabs: Tab[] }>;
-        close: (tabId: string) => Promise<{ success: boolean; tabs: Tab[]; activeTabId: string | null }>;
-        switch: (tabId: string) => Promise<{ success: boolean }>;
-        getAll: () => Promise<{ tabs: Tab[]; activeTabId: string | null }>;
-      };
-      navigation: {
-        go: (tabId: string, url: string) => Promise<{ success: boolean }>;
-        back: (tabId: string) => Promise<{ success: boolean }>;
-        forward: (tabId: string) => Promise<{ success: boolean }>;
-        reload: (tabId: string) => Promise<{ success: boolean }>;
-        stop: (tabId: string) => Promise<{ success: boolean }>;
-      };
-      ai: {
-        request: (request: AIRequest) => Promise<AIResponse>;
-      };
-      qa: {
-        ask: (request: { question: string; tabId: string; context?: { url: string; title: string } }) => Promise<any>;
-      };
-      window: {
-        minimize: () => Promise<void>;
-        maximize: () => Promise<void>;
-        close: () => Promise<void>;
-      };
-      devTools: {
-        open: (tabId?: string) => Promise<void>;
-      };
-      dom: {
-        extractContent: () => Promise<string>;
-        getSelectedText: () => string;
-        getPageInfo: () => { title: string; url: string; selectedText: string };
-      };
-      on: (channel: string, callback: (...args: any[]) => void) => void;
-      off: (channel: string, callback: (...args: any[]) => void) => void;
-      sendAppEvent: (eventType: string, data: any) => void;
-      log: {
-        getEvents: () => Promise<any[]>;
-        clear: () => Promise<{ success: boolean }>;
-      };
-    };
-  }
+interface AgentMessage {
+  id: string;
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  timestamp: number;
 }
 
-const App: React.FC = () => {
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
-  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
-  const [isEventLogOpen, setIsEventLogOpen] = useState(false);
-  const [currentAIResponse, setCurrentAIResponse] = useState<AIResponse | null>(null);
-  const [isAIProcessing, setIsAIProcessing] = useState(false);
-  const [chatByTab, setChatByTab] = useState<Record<string, { from: 'user' | 'ai'; content: string }[]>>({});
+interface AgentSession {
+  id: string;
+  url: string;
+  title: string;
+  state: string;
+  messages: AgentMessage[];
+  context: {
+    url: string;
+    title: string;
+  };
+  createdAt: number;
+  updatedAt: number;
+}
 
-  // Initialize tabs on mount
+// Type guard for electronAPI with sessions
+interface ElectronAPIWithSessions {
+  sessions: {
+    create: (request?: {
+      url?: string;
+      initialMessage?: string;
+    }) => Promise<AgentSession>;
+    get: (sessionId: string) => Promise<AgentSession | null>;
+    getAll: () => Promise<AgentSession[]>;
+    sendMessage: (
+      sessionId: string,
+      content: string
+    ) => Promise<{ success: boolean }>;
+    delete: (sessionId: string) => Promise<boolean>;
+    navigate: (sessionId: string, url: string) => Promise<{ success: boolean }>;
+    showView: (sessionId: string | null) => Promise<{ success: boolean }>;
+    updateViewBounds: (
+      sessionId: string,
+      bounds: { x: number; y: number; width: number; height: number }
+    ) => Promise<{ success: boolean }>;
+  };
+  on: (channel: string, callback: (...args: any[]) => void) => void;
+  off: (channel: string, callback: (...args: any[]) => void) => void;
+  [key: string]: any; // Allow other properties
+}
+
+// Use type assertion - electronAPI is already declared in preload
+
+const App: React.FC = () => {
+  const [sessions, setSessions] = useState<AgentSession[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    null
+  );
+  const [selectedSession, setSelectedSession] = useState<AgentSession | null>(
+    null
+  );
+
+  // Load all sessions on mount
   useEffect(() => {
-    if (!window.electronAPI) {
-      console.error('electronAPI not available (preload not loaded?)');
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (!electronAPI?.sessions) {
+      console.error("electronAPI.sessions not available");
       return;
     }
 
-    const initializeTabs = async () => {
+    const loadSessions = async () => {
       try {
-        const { tabs: initialTabs, activeTabId: initialActiveTabId } =
-          await window.electronAPI.tabs.getAll();
-        // Filter out any invalid tabs
-        const validTabs = (initialTabs || []).filter(tab => tab && tab.id);
-        setTabs(validTabs);
-        setActiveTabId(initialActiveTabId);
+        console.log("🔄 Loading all sessions...");
+        const allSessions = await electronAPI.sessions.getAll();
+        console.log(
+          "📋 Loaded sessions:",
+          allSessions.length,
+          allSessions.map((s) => ({ id: s.id, title: s.title }))
+        );
+        setSessions(allSessions);
       } catch (error) {
-        console.error('Failed to initialize tabs:', error);
-        setTabs([]); // Set empty array on error
+        console.error("Failed to load sessions:", error);
       }
     };
 
-    initializeTabs();
+    loadSessions();
 
-    // Set up IPC listeners
-    const handleTabUpdate = (event: any, updatedTab: Tab) => {
-      if (!updatedTab || !updatedTab.id) {
-        console.warn('[App] Invalid tab update received:', updatedTab);
-        return;
-      }
-      console.log('[App] Received tab:update:', updatedTab.id, 'isLoading:', updatedTab.isLoading, 'url:', updatedTab.url?.substring(0, 50));
-      setTabs(prevTabs =>
-        prevTabs
-          .filter(tab => tab && tab.id) // Filter out any undefined/null tabs
-          .map(tab =>
-            tab.id === updatedTab.id ? { ...tab, ...updatedTab } : tab
-          )
+    // Listen for session updates
+    const handleSessionCreated = (session: AgentSession) => {
+      console.log("🎉 Session created event received in React:", session);
+      setSessions((prev) => {
+        // Check if session already exists
+        if (prev.find((s) => s.id === session.id)) {
+          console.log("Session already exists, updating:", session.id);
+          return prev.map((s) => (s.id === session.id ? session : s));
+        }
+        console.log("Adding new session to list:", session.id);
+        return [...prev, session];
+      });
+      // Always select newly created session
+      setSelectedSessionId(session.id);
+      setSelectedSession(session);
+    };
+
+    const handleSessionUpdated = (session: AgentSession) => {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === session.id ? session : s))
       );
-    };
-
-    const handleTabCreated = (event: any, data: { tabId: string; tabs: Tab[] }) => {
-      setTabs(data.tabs);
-      setActiveTabId(data.tabId);
-    };
-
-    const handleTabClosed = (event: any, data: { success: boolean; tabs: Tab[]; activeTabId: string | null }) => {
-      if (data.success) {
-        setTabs(data.tabs);
-        setActiveTabId(data.activeTabId);
+      if (selectedSessionId === session.id) {
+        setSelectedSession(session);
       }
     };
 
-    const handleAIPanelToggle = () => {
-      setIsAIPanelOpen(prev => !prev);
+    const handleSessionDeleted = (sessionId: string) => {
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      if (selectedSessionId === sessionId) {
+        setSelectedSessionId(null);
+        setSelectedSession(null);
+      }
     };
 
-    const handleCommandPaletteToggle = () => {
-      setIsCommandPaletteOpen(prev => !prev);
-    };
+    if (electronAPI?.on) {
+      console.log("🎧 Setting up session event listeners...");
+      electronAPI.on("agent:session-created", handleSessionCreated);
+      electronAPI.on("agent:session-updated", handleSessionUpdated);
+      electronAPI.on("agent:session-deleted", handleSessionDeleted);
+      console.log("✅ Event listeners registered");
+    } else {
+      console.error("❌ electronAPI.on not available");
+    }
 
-    // Register listeners
-    window.electronAPI.on('tab:update', handleTabUpdate);
-    window.electronAPI.on('tab:created', handleTabCreated);
-    window.electronAPI.on('tab:closed', handleTabClosed);
-    window.electronAPI.on('ai:toggle-panel', handleAIPanelToggle);
-    window.electronAPI.on('command-palette:toggle', handleCommandPaletteToggle);
-
-    // Cleanup
     return () => {
-      window.electronAPI.off('tab:update', handleTabUpdate);
-      window.electronAPI.off('tab:created', handleTabCreated);
-      window.electronAPI.off('tab:closed', handleTabClosed);
-      window.electronAPI.off('ai:toggle-panel', handleAIPanelToggle);
-      window.electronAPI.off('command-palette:toggle', handleCommandPaletteToggle);
+      if (electronAPI?.off) {
+        electronAPI.off("agent:session-created", handleSessionCreated);
+        electronAPI.off("agent:session-updated", handleSessionUpdated);
+        electronAPI.off("agent:session-deleted", handleSessionDeleted);
+      }
     };
-  }, []);
+  }, [selectedSessionId]);
 
-  const handleTabClick = async (tabId: string) => {
-    try {
-      await window.electronAPI.tabs.switch(tabId);
-      setActiveTabId(tabId);
-      if (!chatByTab[tabId]) {
-        setChatByTab(prev => ({ ...prev, [tabId]: [] }));
+  // Load selected session details and show BrowserView
+  useEffect(() => {
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (!electronAPI?.sessions) return;
+
+    const loadSession = async () => {
+      if (selectedSessionId) {
+        try {
+          const session = await electronAPI.sessions.get(selectedSessionId);
+          if (session) {
+            setSelectedSession(session);
+            // Show the BrowserView for this session
+            await electronAPI.sessions.showView(selectedSessionId);
+
+            // Give React a moment to render, then trigger bounds update
+            // This ensures the SessionView component has mounted and measured its div
+            setTimeout(() => {
+              // The ResizeObserver in SessionView will handle the bounds update
+              // But we can also trigger it manually here as a fallback
+              const viewportElement = document.querySelector(
+                "[data-browser-viewport]"
+              ) as HTMLElement;
+              if (viewportElement) {
+                const rect = viewportElement.getBoundingClientRect();
+                electronAPI.sessions.updateViewBounds(selectedSessionId, {
+                  x: Math.round(rect.left),
+                  y: Math.round(rect.top),
+                  width: Math.round(rect.width),
+                  height: Math.round(rect.height),
+                });
+              }
+            }, 100);
+          }
+        } catch (error) {
+          console.error("Failed to load session:", error);
+        }
+      } else {
+        // Hide all BrowserViews when no session is selected
+        await electronAPI.sessions.showView(null);
+        setSelectedSession(null);
       }
+    };
+    loadSession();
+  }, [selectedSessionId]);
+
+  const handleCreateSession = async () => {
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (!electronAPI?.sessions) {
+      console.error("electronAPI.sessions not available");
+      return;
+    }
+    try {
+      const session = await electronAPI.sessions.create();
+      console.log("Session created:", session);
+      // Session will be set via event listener, but set it immediately too
+      setSelectedSessionId(session.id);
+      setSelectedSession(session);
+      setSessions((prev) => {
+        if (prev.find((s) => s.id === session.id)) {
+          return prev;
+        }
+        return [...prev, session];
+      });
     } catch (error) {
-      console.error('Failed to switch tab:', error);
+      console.error("Failed to create session:", error);
     }
   };
 
-  const handleTabClose = async (tabId: string) => {
-    try {
-      const result = await window.electronAPI.tabs.close(tabId);
-      if (result.success) {
-        setTabs(result.tabs);
-        setActiveTabId(result.activeTabId);
-      }
-    } catch (error) {
-      console.error('Failed to close tab:', error);
+  const handleSelectSession = (sessionId: string) => {
+    setSelectedSessionId(sessionId);
+  };
+
+  const handleBackToSessions = async () => {
+    setSelectedSessionId(null);
+    setSelectedSession(null);
+    // Hide BrowserViews when going back to session list
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (electronAPI?.sessions) {
+      await electronAPI.sessions.showView(null);
     }
   };
 
-  const handleNewTab = async () => {
+  const handleRefreshSessions = async () => {
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (!electronAPI?.sessions) return;
     try {
-      const result = await window.electronAPI.tabs.create();
-      setTabs(result.tabs);
-      setActiveTabId(result.tabId);
-      setChatByTab(prev => ({ ...prev, [result.tabId]: [] }));
+      console.log("🔄 Manually refreshing sessions...");
+      const allSessions = await electronAPI.sessions.getAll();
+      console.log("📋 Refreshed sessions:", allSessions.length);
+      setSessions(allSessions);
     } catch (error) {
-      console.error('Failed to create tab:', error);
+      console.error("Failed to refresh sessions:", error);
     }
   };
 
   const handleNavigate = async (url: string) => {
-    if (!activeTabId) return;
-
+    if (!selectedSessionId) return;
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (!electronAPI?.sessions) return;
     try {
-      await window.electronAPI.navigation.go(activeTabId, url);
+      await electronAPI.sessions.navigate(selectedSessionId, url);
+      // Session will be updated via event listener
     } catch (error) {
-      console.error('Failed to navigate:', error);
+      console.error("Failed to navigate:", error);
     }
   };
 
-  const handleBack = async () => {
-    if (!activeTabId) return;
-
+  const handleSendMessage = async (content: string) => {
+    if (!selectedSessionId) return;
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (!electronAPI?.sessions) return;
     try {
-      await window.electronAPI.navigation.back(activeTabId);
+      await electronAPI.sessions.sendMessage(selectedSessionId, content);
+      // Session will be updated via event listener
     } catch (error) {
-      console.error('Failed to go back:', error);
+      console.error("Failed to send message:", error);
     }
   };
 
-  const handleForward = async () => {
-    if (!activeTabId) return;
-
-    try {
-      await window.electronAPI.navigation.forward(activeTabId);
-    } catch (error) {
-      console.error('Failed to go forward:', error);
-    }
-  };
-
-  const handleReload = async () => {
-    if (!activeTabId) return;
-
-    try {
-      await window.electronAPI.navigation.reload(activeTabId);
-    } catch (error) {
-      console.error('Failed to reload:', error);
-    }
-  };
-
-  const handleStop = async () => {
-    if (!activeTabId) return;
-
-    try {
-      await window.electronAPI.navigation.stop(activeTabId);
-    } catch (error) {
-      console.error('Failed to stop loading:', error);
-    }
-  };
-
-  const appendChat = (tabId: string, from: 'user' | 'ai', content: string, data?: any) => {
-    setChatByTab(prev => ({
-      ...prev,
-      [tabId]: [...(prev[tabId] || []), { from, content, data }]
-    }));
-  };
-
-  const handleAIRequest = async (request: AIRequest): Promise<AIResponse | null> => {
-    setIsAIProcessing(true);
-    setCurrentAIResponse(null);
-
-    try {
-      // Add context from current page if available
-      const pageInfo = window.electronAPI.dom.getPageInfo();
-      const enhancedRequest: AIRequest = {
-        ...request,
-        tabId: activeTabId ?? undefined, // Pass the actual tabId (convert null to undefined)
-        context: {
-          url: pageInfo.url,
-          title: pageInfo.title,
-          selectedText: pageInfo.selectedText,
-        }
-      };
-
-      const response = await window.electronAPI.ai.request(enhancedRequest);
-      setCurrentAIResponse(response);
-      if (activeTabId) {
-        if (response.success) {
-          // Include metadata (chunks, source location, prompt) with the message
-          appendChat(activeTabId, 'ai', response.content, {
-            relevantChunks: response.relevantChunks,
-            sourceLocation: response.sourceLocation,
-            prompt: response.prompt,
-          });
-        } else if (response.error) {
-          appendChat(activeTabId, 'ai', `Error: ${response.error}`);
-        }
-      }
-      return response;
-    } catch (error) {
-      console.error('AI request failed:', error);
-      setCurrentAIResponse({
-        success: false,
-        content: '',
-        error: 'AI service unavailable'
-      });
-      if (activeTabId) {
-        appendChat(activeTabId, 'ai', 'Error: AI service unavailable');
-      }
-      return {
-        success: false,
-        content: '',
-        error: 'AI service unavailable'
-      };
-    } finally {
-      setIsAIProcessing(false);
-    }
-  };
-
-  const handleNewTask = () => {
-    if (activeTabId) {
-      setChatByTab(prev => ({ ...prev, [activeTabId]: [] }));
-    }
-  };
-
-  const handleChatSend = async (text: string): Promise<AIResponse | null> => {
-    if (!activeTabId) return null;
-    appendChat(activeTabId, 'user', text);
-    const request: AIRequest = { 
-      type: 'chat', 
-      content: text,
-      tabId: activeTabId // activeTabId is guaranteed to be string here due to the check above
-    };
-    return handleAIRequest(request);
-  };
-
-  const activeTab = tabs.find(tab => tab.id === activeTabId);
-  const activeChat = activeTabId ? chatByTab[activeTabId] || [] : [];
+  // Debug logging
+  console.log("App render:", {
+    selectedSessionId,
+    hasSelectedSession: !!selectedSession,
+    sessionsCount: sessions.length,
+    sessions: sessions.map((s) => ({ id: s.id, title: s.title, url: s.url })),
+  });
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="h-8 bg-gray-100 border-b border-gray-200 flex items-center justify-end px-2 select-none">
-        <div className="flex space-x-1">
-          <button onClick={() => window.electronAPI.window.minimize()} className="w-10 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-200 rounded">─</button>
-          <button onClick={() => window.electronAPI.window.maximize()} className="w-10 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-200 rounded">□</button>
-          <button onClick={() => window.electronAPI.window.close()} className="w-10 h-8 flex items-center justify-center text-red-600 hover:bg-red-100 rounded">✕</button>
-        </div>
-      </div>
-
-      <div className="flex flex-1 min-h-0 bg-gray-100">
-        <div className="flex-1 relative min-w-0 bg-black">
-          <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-xs pointer-events-none">
-            Browser View (Electron) overlays this area
-          </div>
-        </div>
-
-        <div className="w-[420px] min-w-[360px] max-w-[520px] flex flex-col bg-white border-l border-gray-200">
-          <TabBar
-            tabs={tabs}
-            activeTabId={activeTabId || ''}
-            onTabClick={handleTabClick}
-            onTabClose={handleTabClose}
-            onNewTab={handleNewTab}
-          />
-
-          <AddressBar
-            url={activeTab?.url || ''}
-            isLoading={activeTab?.isLoading || false}
-            canGoBack={activeTab?.canGoBack || false}
-            canGoForward={activeTab?.canGoForward || false}
-            onNavigate={handleNavigate}
-            onBack={handleBack}
-            onForward={handleForward}
-            onReload={handleReload}
-            onStop={handleStop}
-          />
-
-          <EmbeddingProgress 
-            tabId={activeTabId} 
-            tabIsLoading={activeTab?.isLoading}
-            tabUrl={activeTab?.url}
-          />
-
-          <AIChatPanel
-            messages={activeChat}
-            onSend={handleChatSend}
-            onNewTask={handleNewTask}
-            isProcessing={isAIProcessing}
-            hasActiveTab={!!activeTabId}
-          />
-        </div>
-      </div>
-
-      <AISidePanel
-        isOpen={isAIPanelOpen}
-        onToggle={() => setIsAIPanelOpen(!isAIPanelOpen)}
-        onRequest={handleAIRequest}
-        currentResponse={currentAIResponse || undefined}
-        isProcessing={isAIProcessing}
-      />
-
-      {/* QA Panel - Show when AI panel is open */}
-      {isAIPanelOpen && activeTabId && (
-        <div className="fixed right-0 top-0 h-full w-96 bg-white dark:bg-gray-800 shadow-xl z-40 overflow-y-auto p-4">
-          <QAPanel
-            tabId={activeTabId}
-            pageTitle={activeTab?.title}
-            pageUrl={activeTab?.url}
-          />
-        </div>
+    <div
+      className="h-screen w-screen overflow-hidden bg-white"
+      style={{
+        height: "100vh",
+        width: "100vw",
+        margin: 0,
+        padding: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {selectedSession && selectedSessionId ? (
+        <SessionView
+          session={selectedSession}
+          onNavigate={handleNavigate}
+          onSendMessage={handleSendMessage}
+          onBack={handleBackToSessions}
+        />
+      ) : (
+        <SessionList
+          sessions={sessions}
+          onCreateSession={handleCreateSession}
+          onSelectSession={handleSelectSession}
+          onRefresh={handleRefreshSessions}
+        />
       )}
-
-      <CommandPalette
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-        onCommand={(command) => {
-          // TODO: Implement command execution
-          console.log('Command executed:', command);
-          setIsCommandPaletteOpen(false);
-        }}
-      />
-
-      <EventLog
-        isOpen={isEventLogOpen}
-        onToggle={() => setIsEventLogOpen(!isEventLogOpen)}
-      />
     </div>
   );
 };

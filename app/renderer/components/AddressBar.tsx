@@ -34,9 +34,9 @@ export const AddressBar: React.FC<AddressBarProps> = ({
   };
 
   return (
-    <div className="h-12 bg-white border-b border-gray-200 flex items-center px-4 gap-2">
+    <div className="h-12 bg-white border-b border-gray-200 flex items-center px-3 gap-2 shadow-sm">
       <button
-        className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 disabled:opacity-50 flex items-center justify-center hover:bg-gray-200"
+        className="w-9 h-9 rounded-md bg-gray-100 text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center hover:bg-gray-200 transition-colors text-sm font-medium"
         onClick={onBack}
         disabled={!canGoBack}
         title="Go back"
@@ -45,7 +45,7 @@ export const AddressBar: React.FC<AddressBarProps> = ({
       </button>
 
       <button
-        className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 disabled:opacity-50 flex items-center justify-center hover:bg-gray-200"
+        className="w-9 h-9 rounded-md bg-gray-100 text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center hover:bg-gray-200 transition-colors text-sm font-medium"
         onClick={onForward}
         disabled={!canGoForward}
         title="Go forward"
@@ -54,7 +54,7 @@ export const AddressBar: React.FC<AddressBarProps> = ({
       </button>
 
       <button
-        className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200"
+        className="w-9 h-9 rounded-md bg-gray-100 text-gray-700 flex items-center justify-center hover:bg-gray-200 transition-colors text-sm font-medium"
         onClick={isLoading ? onStop : onReload}
         title={isLoading ? 'Stop loading' : 'Reload'}
       >
@@ -64,19 +64,19 @@ export const AddressBar: React.FC<AddressBarProps> = ({
       <form onSubmit={handleSubmit} className="flex-1 flex gap-2">
         <input
           type="text"
-          className="w-full h-10 px-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+          className="flex-1 h-9 px-4 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm bg-white"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search or enter URL"
+          placeholder="Enter URL or search..."
           spellCheck={false}
         />
         <button
           type="submit"
-          className="px-4 h-10 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="px-5 h-9 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors shadow-sm"
           title="Load URL"
         >
-          Fetch
+          Go
         </button>
       </form>
     </div>

@@ -38,7 +38,7 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
     // Load initial events
     const loadEvents = async () => {
       try {
-        const initialEvents = await (window.electronAPI as any).log.getEvents();
+        const initialEvents = await ((window as any).electronAPI?.log?.getEvents() || Promise.resolve([]));
         setEvents(initialEvents || []);
       } catch (error) {
         // Silently fail - events will come via IPC
@@ -89,15 +89,16 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
 
     // Register event listener
     const setupListener = () => {
-      if (!window.electronAPI) {
+      const electronAPI = (window as any).electronAPI;
+      if (!electronAPI) {
         console.warn('[EventLog] window.electronAPI not available yet, retrying...');
         setTimeout(setupListener, 100);
         return;
       }
-      
+
       try {
         console.log('[EventLog] Registering event listener for log:event');
-        window.electronAPI.on('log:event', handleLogEvent);
+        electronAPI.on('log:event', handleLogEvent);
         console.log('[EventLog] Event listener registered successfully');
       } catch (error) {
         console.error('[EventLog] Failed to register event listener:', error);
@@ -108,9 +109,10 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
     
     // Cleanup: remove listener on unmount
     return () => {
-      if (window.electronAPI) {
+      const electronAPI = (window as any).electronAPI;
+      if (electronAPI) {
         try {
-          window.electronAPI.off('log:event', handleLogEvent);
+          electronAPI.off('log:event', handleLogEvent);
           console.log('[EventLog] Event listener removed');
         } catch (error) {
           console.error('[EventLog] Failed to remove event listener:', error);
@@ -120,7 +122,7 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
 
     return () => {
       try {
-        window.electronAPI.off('log:event', handleLogEvent);
+        ((window as any).electronAPI as any)?.off('log:event', handleLogEvent);
       } catch (error) {
         // Ignore cleanup errors
       }
@@ -185,7 +187,7 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
 
   const handleClear = async () => {
     try {
-      await (window.electronAPI as any).log.clear();
+      await ((window as any).electronAPI?.log?.clear() || Promise.resolve({ success: false }));
       setEvents([]);
     } catch (error) {
       console.error('Failed to clear events:', error);

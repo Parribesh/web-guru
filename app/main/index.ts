@@ -1,10 +1,10 @@
-import { app, BrowserWindow, Menu, dialog, globalShortcut } from 'electron';
-import * as path from 'path';
-import * as fs from 'fs';
-import { setupIPC } from './ipc';
-import { createMainWindow } from './windows';
-import { setupAIService } from './ai';
-import { eventLogger } from './logging/event-logger';
+import { app, BrowserWindow, Menu, dialog, globalShortcut } from "electron";
+import * as path from "path";
+import * as fs from "fs";
+import { setupIPC } from "./ipc";
+import { createMainWindow } from "./windows";
+import { setupAIService } from "./ai";
+import { eventLogger } from "./logging/event-logger";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -13,7 +13,7 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on("second-instance", () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -21,7 +21,7 @@ if (!gotTheLock) {
   });
 }
 
-app.on('ready', async () => {
+app.on("ready", async () => {
   // Set up application menu
   setupApplicationMenu();
 
@@ -30,21 +30,23 @@ app.on('ready', async () => {
 
   // Set up event logger
   eventLogger.setMainWindow(mainWindow);
-  eventLogger.info('App', 'Application starting...');
+  eventLogger.info("App", "Application starting...");
 
   // Reset main window zoom to 1.0 on startup
-  mainWindow.webContents.on('did-finish-load', () => {
-    console.log('🖼️ React UI loaded, resetting zoom to 1.0');
+  mainWindow.webContents.on("did-finish-load", () => {
+    console.log("🖼️ React UI loaded, resetting zoom to 1.0");
     mainWindow!.webContents.setZoomFactor(1.0);
     mainWindow!.webContents.invalidate();
-    eventLogger.success('App', 'React UI loaded successfully');
+    eventLogger.success("App", "React UI loaded successfully");
   });
 
   // Set up IPC handlers
-  const tabsManager = setupIPC(mainWindow);
+  const { tabManager, agentManager, handleCreateSession } =
+    setupIPC(mainWindow);
 
-  // Make tabsManager and mainWindow globally accessible
-  (globalThis as any).tabsManager = tabsManager;
+  // Make managers and mainWindow globally accessible
+  (globalThis as any).tabsManager = tabManager;
+  (globalThis as any).agentManager = agentManager;
   (globalThis as any).mainWindow = mainWindow;
 
   // Initialize AI service
@@ -53,44 +55,116 @@ app.on('ready', async () => {
   // Register global shortcuts (after tabsManager is available)
   setupGlobalShortcuts();
 
-  // TEMPORARY: Monitor for external zoom commands
-  const commandFile = path.join(process.cwd(), 'zoom-command.txt');
-  setInterval(() => {
+  // Monitor for external commands via file
+  // Use __dirname to find project root (more reliable than process.cwd())
+  const projectRoot = __dirname.includes("dist")
+    ? path.resolve(__dirname, "../../..")
+    : path.resolve(__dirname, "../..");
+  const commandFile = path.join(projectRoot, "app-command.json");
+  const zoomCommandFile = path.join(projectRoot, "zoom-command.txt");
+
+  console.log("📁 Command file paths:", {
+    commandFile,
+    zoomCommandFile,
+    projectRoot,
+  });
+
+  setInterval(async () => {
     try {
-      if (fs.existsSync(commandFile)) {
-        const command = fs.readFileSync(commandFile, 'utf8').trim();
-        if (command === 'reset') {
-          console.log('📨 External zoom reset command received');
+      // Handle zoom commands (legacy format)
+      if (fs.existsSync(zoomCommandFile)) {
+        const command = fs.readFileSync(zoomCommandFile, "utf8").trim();
+        if (command === "reset") {
+          console.log("📨 External zoom reset command received");
           const tabsManager = (globalThis as any).tabsManager;
           if (tabsManager && tabsManager.resetZoomActiveTab) {
             tabsManager.resetZoomActiveTab();
-            console.log('✅ External zoom reset executed');
+            console.log("✅ External zoom reset executed");
           }
-          // Delete the command file
-          fs.unlinkSync(commandFile);
+          fs.unlinkSync(zoomCommandFile);
+        }
+      }
+
+      // Handle app commands (JSON format)
+      if (fs.existsSync(commandFile)) {
+        const commandData = fs.readFileSync(commandFile, "utf8").trim();
+        if (commandData) {
+          try {
+            const command = JSON.parse(commandData);
+            console.log("📨 External command received:", command);
+
+            if (command.type === "create-session") {
+              // Use the same IPC handler function for consistency
+              // This ensures the same logic is used whether called from React or terminal
+              if (handleCreateSession) {
+                try {
+                  console.log("📝 Creating session from terminal command...");
+                  // Simulate an IPC event (not used but required for handler signature)
+                  const fakeEvent = {
+                    sender: mainWindow?.webContents,
+                  } as any;
+
+                  const session = await handleCreateSession(fakeEvent, {
+                    url: command.url,
+                    initialMessage: command.initialMessage,
+                  });
+
+                  console.log("✅ Session created from terminal:");
+                  console.log("   ID:", session.id);
+                  console.log("   URL:", session.url || "none");
+                  console.log("   Title:", session.title);
+                  console.log("   Event should be sent to renderer...");
+                } catch (error) {
+                  console.error(
+                    "❌ Failed to create session from terminal:",
+                    error
+                  );
+                }
+              } else {
+                console.error("❌ handleCreateSession not available");
+              }
+            } else if (command.type === "zoom-reset") {
+              const tabsManager = (globalThis as any).tabsManager;
+              if (tabsManager && tabsManager.resetZoomActiveTab) {
+                tabsManager.resetZoomActiveTab();
+                console.log("✅ Zoom reset executed");
+              }
+            } else {
+              console.warn("⚠️ Unknown command type:", command.type);
+            }
+
+            // Delete the command file after processing
+            fs.unlinkSync(commandFile);
+          } catch (parseError) {
+            console.error("❌ Failed to parse command file:", parseError);
+            // Try to delete invalid file
+            try {
+              fs.unlinkSync(commandFile);
+            } catch {}
+          }
         }
       }
     } catch (error) {
       // Ignore file errors
     }
-  }, 1000);
+  }, 500); // Check every 500ms for faster response
 
   // Handle app events
-  app.on('activate', () => {
+  app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createMainWindow();
     }
   });
 });
 
-app.on('window-all-closed', () => {
+app.on("window-all-closed", () => {
   // On macOS, keep app running even when all windows are closed
-  if (process.platform !== 'darwin') {
+  if (process.platform !== "darwin") {
     app.quit();
   }
 });
 
-app.on('before-quit', () => {
+app.on("before-quit", () => {
   // Unregister global shortcuts
   globalShortcut.unregisterAll();
 
@@ -102,19 +176,19 @@ app.on('before-quit', () => {
 });
 
 // Security: Prevent navigation to external protocols
-app.on('web-contents-created', (event, contents) => {
-  contents.on('will-navigate', (event, navigationUrl) => {
+app.on("web-contents-created", (event, contents) => {
+  contents.on("will-navigate", (event, navigationUrl) => {
     const parsedUrl = new URL(navigationUrl);
 
-    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
       event.preventDefault();
     }
   });
 
-  contents.on('will-navigate', (event, navigationUrl) => {
+  contents.on("will-navigate", (event, navigationUrl) => {
     // Additional check for navigation events
     const parsedUrl = new URL(navigationUrl);
-    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
       event.preventDefault();
     }
   });
@@ -123,118 +197,115 @@ app.on('web-contents-created', (event, contents) => {
 function setupApplicationMenu() {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
-      label: 'File',
+      label: "File",
       submenu: [
         {
-          label: 'New Tab',
-          accelerator: 'CmdOrCtrl+T',
+          label: "New Tab",
+          accelerator: "CmdOrCtrl+T",
           click: () => {
-            mainWindow?.webContents.send('tab:create');
-          }
+            mainWindow?.webContents.send("tab:create");
+          },
         },
         {
-          label: 'Close Tab',
-          accelerator: 'CmdOrCtrl+W',
+          label: "Close Tab",
+          accelerator: "CmdOrCtrl+W",
           click: () => {
-            mainWindow?.webContents.send('tab:close');
-          }
+            mainWindow?.webContents.send("tab:close");
+          },
         },
-        { type: 'separator' },
+        { type: "separator" },
         {
-          label: 'Quit',
-          accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
+          label: "Quit",
+          accelerator: process.platform === "darwin" ? "Cmd+Q" : "Ctrl+Q",
           click: () => {
             app.quit();
-          }
-        }
-      ]
+          },
+        },
+      ],
     },
     {
-      label: 'Edit',
+      label: "Edit",
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' }
-      ]
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
     },
     {
-      label: 'View',
+      label: "View",
       submenu: [
         {
-          label: 'Toggle AI Panel',
-          accelerator: 'CmdOrCtrl+Shift+A',
+          label: "Toggle AI Panel",
+          accelerator: "CmdOrCtrl+Shift+A",
           click: () => {
-            mainWindow?.webContents.send('ai:toggle-panel');
-          }
+            mainWindow?.webContents.send("ai:toggle-panel");
+          },
         },
         {
-          label: 'Command Palette',
-          accelerator: 'CmdOrCtrl+K',
+          label: "Command Palette",
+          accelerator: "CmdOrCtrl+K",
           click: () => {
-            mainWindow?.webContents.send('command-palette:toggle');
-          }
+            mainWindow?.webContents.send("command-palette:toggle");
+          },
         },
-        { type: 'separator' },
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
+        { type: "separator" },
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
         {
-          label: 'Reset Zoom',
-          accelerator: 'CmdOrCtrl+0',
+          label: "Reset Zoom",
+          accelerator: "CmdOrCtrl+0",
           click: () => {
-            console.log('Reset Zoom menu clicked');
+            console.log("Reset Zoom menu clicked");
             handleZoomReset();
-          }
+          },
         },
         {
-          label: 'Zoom In',
-          accelerator: 'CmdOrCtrl+=',
+          label: "Zoom In",
+          accelerator: "CmdOrCtrl+=",
           click: () => {
-            console.log('Zoom In menu clicked');
+            console.log("Zoom In menu clicked");
             handleZoom(0.1);
-          }
+          },
         },
         {
-          label: 'Zoom Out',
-          accelerator: 'CmdOrCtrl+-',
+          label: "Zoom Out",
+          accelerator: "CmdOrCtrl+-",
           click: () => {
-            console.log('Zoom Out menu clicked');
+            console.log("Zoom Out menu clicked");
             handleZoom(-0.1);
-          }
+          },
         },
-        { type: 'separator' },
-        { role: 'togglefullscreen' }
-      ]
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
     },
     {
-      label: 'Window',
-      submenu: [
-        { role: 'minimize' },
-        { role: 'close' }
-      ]
-    }
+      label: "Window",
+      submenu: [{ role: "minimize" }, { role: "close" }],
+    },
   ];
 
   // macOS specific menu
-  if (process.platform === 'darwin') {
+  if (process.platform === "darwin") {
     template.unshift({
       label: app.getName(),
       submenu: [
-        { role: 'about' },
-        { type: 'separator' },
-        { role: 'services', submenu: [] },
-        { type: 'separator' },
-        { role: 'hide' },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
-        { type: 'separator' },
-        { role: 'quit' }
-      ]
+        { role: "about" },
+        { type: "separator" },
+        { role: "services", submenu: [] },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
     });
   }
 
@@ -243,14 +314,17 @@ function setupApplicationMenu() {
 }
 
 function handleZoom(delta: number) {
-  console.log(`🎮 Zoom ${delta > 0 ? 'IN' : 'OUT'} handler called with delta: ${delta}`);
-  
+  console.log(
+    `🎮 Zoom ${delta > 0 ? "IN" : "OUT"} handler called with delta: ${delta}`
+  );
+
   // Zoom the React UI (main window)
   if (mainWindow) {
     const currentZoom = mainWindow.webContents.getZoomFactor();
-    const newZoom = delta > 0 ?
-      Math.min(currentZoom + delta, 5.0) :
-      Math.max(currentZoom + delta, 0.1);
+    const newZoom =
+      delta > 0
+        ? Math.min(currentZoom + delta, 5.0)
+        : Math.max(currentZoom + delta, 0.1);
     console.log(`🖼️ React UI zoom: ${currentZoom} → ${newZoom}`);
     mainWindow.webContents.setZoomFactor(newZoom);
     mainWindow.webContents.invalidate();
@@ -263,13 +337,13 @@ function handleZoom(delta: number) {
     const success = tabsManager.zoomActiveTab(delta);
     console.log(`✅ BrowserView zoom operation result: ${success}`);
   } else {
-    console.log('❌ tabsManager not available in global scope');
+    console.log("❌ tabsManager not available in global scope");
   }
 }
 
 function handleZoomReset() {
-  console.log('🔄 Zoom reset handler called');
-  
+  console.log("🔄 Zoom reset handler called");
+
   // Reset React UI (main window) zoom
   if (mainWindow) {
     const currentZoom = mainWindow.webContents.getZoomFactor();
@@ -284,37 +358,51 @@ function handleZoomReset() {
     const success = tabsManager.resetZoomActiveTab();
     console.log(`✅ BrowserView zoom reset success: ${success}`);
   } else {
-    console.log('❌ tabsManager not available');
+    console.log("❌ tabsManager not available");
   }
 }
 
 function setupGlobalShortcuts() {
-  console.log('Setting up global shortcuts');
+  console.log("Setting up global shortcuts");
 
   // Zoom shortcuts - try multiple accelerator formats
-  const zoomInRegistered1 = globalShortcut.register('CommandOrControl+=', () => {
-    console.log('🚀 Global Zoom In (=) shortcut triggered at:', new Date().toISOString());
-    handleZoom(0.1);
-  });
-  console.log('Zoom In (=) shortcut registered:', zoomInRegistered1);
+  const zoomInRegistered1 = globalShortcut.register(
+    "CommandOrControl+=",
+    () => {
+      console.log(
+        "🚀 Global Zoom In (=) shortcut triggered at:",
+        new Date().toISOString()
+      );
+      handleZoom(0.1);
+    }
+  );
+  console.log("Zoom In (=) shortcut registered:", zoomInRegistered1);
 
-  const zoomInRegistered2 = globalShortcut.register('CommandOrControl+Plus', () => {
-    console.log('Global Zoom In (Plus) shortcut triggered');
-    handleZoom(0.1);
-  });
-  console.log('Zoom In (Plus) shortcut registered:', zoomInRegistered2);
+  const zoomInRegistered2 = globalShortcut.register(
+    "CommandOrControl+Plus",
+    () => {
+      console.log("Global Zoom In (Plus) shortcut triggered");
+      handleZoom(0.1);
+    }
+  );
+  console.log("Zoom In (Plus) shortcut registered:", zoomInRegistered2);
 
-  const zoomInRegistered3 = globalShortcut.register('CommandOrControl+Shift+=', () => {
-    console.log('Global Zoom In (Shift+=) shortcut triggered');
-    handleZoom(0.1);
-  });
-  console.log('Zoom In (Shift+=) shortcut registered:', zoomInRegistered3);
+  const zoomInRegistered3 = globalShortcut.register(
+    "CommandOrControl+Shift+=",
+    () => {
+      console.log("Global Zoom In (Shift+=) shortcut triggered");
+      handleZoom(0.1);
+    }
+  );
+  console.log("Zoom In (Shift+=) shortcut registered:", zoomInRegistered3);
 
-  globalShortcut.register('CommandOrControl+Plus', () => {
-    console.log('Global Zoom In (Plus) shortcut triggered');
+  globalShortcut.register("CommandOrControl+Plus", () => {
+    console.log("Global Zoom In (Plus) shortcut triggered");
     const activeTabId = (globalThis as any).tabsManager?.getActiveTabId();
     if (activeTabId) {
-      const activeView = (globalThis as any).tabsManager?.views?.get(activeTabId);
+      const activeView = (globalThis as any).tabsManager?.views?.get(
+        activeTabId
+      );
       if (activeView) {
         const currentZoom = activeView.webContents.getZoomFactor();
         activeView.webContents.setZoomFactor(Math.min(currentZoom + 0.1, 5.0));
@@ -324,19 +412,21 @@ function setupGlobalShortcuts() {
 
   // Try different accelerator formats for zoom out - prioritize regular minus
   const accelerators = [
-    'CommandOrControl+-',
-    'Minus',  // Try just the key
-    'CommandOrControl+Minus',
-    'CommandOrControl+numsub',
-    'CommandOrControl+numsubtract',
-    'Ctrl+-',
-    'Cmd+-'
+    "CommandOrControl+-",
+    "Minus", // Try just the key
+    "CommandOrControl+Minus",
+    "CommandOrControl+numsub",
+    "CommandOrControl+numsubtract",
+    "Ctrl+-",
+    "Cmd+-",
   ];
 
   for (const accel of accelerators) {
     try {
       const registered = globalShortcut.register(accel, () => {
-        console.log(`🚫 Global Zoom Out shortcut triggered with ${accel} at ${new Date().toISOString()}`);
+        console.log(
+          `🚫 Global Zoom Out shortcut triggered with ${accel} at ${new Date().toISOString()}`
+        );
         handleZoom(-0.1);
       });
       console.log(`Zoom Out shortcut ${accel} registered: ${registered}`);
@@ -347,14 +437,19 @@ function setupGlobalShortcuts() {
         console.log(`❌ Failed to register Zoom Out accelerator: ${accel}`);
       }
     } catch (error) {
-      console.log(`Failed to register ${accel}:`, error instanceof Error ? error.message : String(error));
+      console.log(
+        `Failed to register ${accel}:`,
+        error instanceof Error ? error.message : String(error)
+      );
     }
   }
 
-
-  const resetZoomRegistered = globalShortcut.register('CommandOrControl+0', () => {
-    console.log('Global Reset Zoom shortcut triggered');
-    handleZoomReset();
-  });
-  console.log('Reset Zoom shortcut registered:', resetZoomRegistered);
+  const resetZoomRegistered = globalShortcut.register(
+    "CommandOrControl+0",
+    () => {
+      console.log("Global Reset Zoom shortcut triggered");
+      handleZoomReset();
+    }
+  );
+  console.log("Reset Zoom shortcut registered:", resetZoomRegistered);
 }

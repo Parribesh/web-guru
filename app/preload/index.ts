@@ -94,6 +94,26 @@ const electronAPI = {
       ipcRenderer.invoke('qa:ask', request),
   },
 
+  // Agent Session Management
+  sessions: {
+    create: (request?: { url?: string; initialMessage?: string }) =>
+      ipcRenderer.invoke('agent:create-session', request),
+    get: (sessionId: string) =>
+      ipcRenderer.invoke('agent:get-session', sessionId),
+    getAll: () =>
+      ipcRenderer.invoke('agent:get-all-sessions'),
+    sendMessage: (sessionId: string, content: string) =>
+      ipcRenderer.invoke('agent:send-message', sessionId, content),
+    delete: (sessionId: string) =>
+      ipcRenderer.invoke('agent:delete-session', sessionId),
+    navigate: (sessionId: string, url: string) =>
+      ipcRenderer.invoke('agent:session-navigate', sessionId, url),
+    showView: (sessionId: string | null) =>
+      ipcRenderer.invoke('agent:session-show-view', sessionId),
+    updateViewBounds: (sessionId: string, bounds: { x: number; y: number; width: number; height: number }) =>
+      ipcRenderer.invoke('agent:session-update-bounds', sessionId, bounds),
+  },
+
   // Logging services
   log: {
     getEvents: () => ipcRenderer.invoke('log:get-events'),
@@ -148,6 +168,9 @@ const electronAPI = {
       "ai:toggle-panel",
       "log:event",
       "log:clear",
+      "agent:session-created",
+      "agent:session-updated",
+      "agent:session-deleted",
     ];
 
     if (allowedChannels.includes(channel)) {

@@ -288,7 +288,7 @@ export const EmbeddingProgress: React.FC<EmbeddingProgressProps> = ({ tabId, tab
     };
 
     try {
-      window.electronAPI.on('log:event', handleLogEvent);
+      ((window as any).electronAPI as any)?.on('log:event', handleLogEvent);
       console.log('[EmbeddingProgress] Event listener registered for tab:', tabId);
     } catch (error) {
       console.error('[EmbeddingProgress] Failed to register event listener:', error);
@@ -296,7 +296,7 @@ export const EmbeddingProgress: React.FC<EmbeddingProgressProps> = ({ tabId, tab
 
     return () => {
       try {
-        window.electronAPI.off('log:event', handleLogEvent);
+        ((window as any).electronAPI as any)?.off('log:event', handleLogEvent);
         console.log('[EmbeddingProgress] Event listener removed for tab:', tabId);
       } catch (error) {
         console.error('[EmbeddingProgress] Failed to remove event listener:', error);

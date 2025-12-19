@@ -3,6 +3,7 @@ import { TabManager } from './tabs';
 import { processAIRequest } from './ai';
 import { cachePageContent } from './rag/qa-service';
 import { eventLogger } from './logging/event-logger';
+import { AgentManager } from './agent/AgentManager';
 import {
   IPCChannels,
   AIRequest,
@@ -12,11 +13,13 @@ import {
 } from '../shared/types';
 
 let tabManager: TabManager | null = null;
+let agentManager: AgentManager | null = null;
 
 export function setupIPC(mainWindow: BrowserWindow) {
   console.log('Setting up IPC handlers');
   tabManager = new TabManager(mainWindow);
-  console.log('TabManager created, registering IPC handlers');
+  agentManager = new AgentManager(mainWindow, tabManager);
+  console.log('TabManager and AgentManager created, registering IPC handlers');
 
   // Tab management
   ipcMain.handle(IPCChannels.CREATE_TAB, async (event, url?: string) => {
@@ -254,7 +257,183 @@ export function setupIPC(mainWindow: BrowserWindow) {
     }
   });
 
-  return tabManager;
+  // Agent Session Management
+  // Extract handler logic to a reusable function (can be called from IPC or terminal)
+  async function handleCreateSession(event: any, request: { url?: string; initialMessage?: string }) {
+    if (!agentManager) {
+      throw new Error('AgentManager not initialized');
+    }
+    const session = await agentManager.createSession(request);
+    // Return serialized version (AgentManager already sends events)
+    // But we need to return a clean copy for the immediate response
+    const serialized = JSON.parse(JSON.stringify(session));
+    return serialized;
+  }
+
+  ipcMain.handle('agent:create-session', handleCreateSession);
+
+  ipcMain.handle('agent:get-session', async (event, sessionId: string) => {
+    if (!agentManager) {
+      throw new Error('AgentManager not initialized');
+    }
+    const session = agentManager.getSession(sessionId);
+    if (!session) return null;
+    // Return serialized version
+    const serialized = JSON.parse(JSON.stringify(session));
+    if ((serialized as any).tabId) {
+      delete (serialized as any).tabId;
+    }
+    return serialized;
+  });
+
+  ipcMain.handle('agent:get-all-sessions', async () => {
+    if (!agentManager) {
+      throw new Error('AgentManager not initialized');
+    }
+    const sessions = agentManager.getAllSessions();
+    // Return serialized versions
+    return sessions.map(session => {
+      const serialized = JSON.parse(JSON.stringify(session));
+      if ((serialized as any).tabId) {
+        delete (serialized as any).tabId;
+      }
+      return serialized;
+    });
+  });
+
+  ipcMain.handle('agent:send-message', async (event, sessionId: string, content: string) => {
+    if (!agentManager) {
+      throw new Error('AgentManager not initialized');
+    }
+    agentManager.sendMessage(sessionId, content);
+    return { success: true };
+  });
+
+  ipcMain.handle('agent:delete-session', async (event, sessionId: string) => {
+    if (!agentManager) {
+      throw new Error('AgentManager not initialized');
+    }
+    return agentManager.deleteSession(sessionId);
+  });
+
+  // Session navigation - navigate the BrowserView for a session
+  ipcMain.handle('agent:session-navigate', async (event, sessionId: string, url: string) => {
+    if (!agentManager) {
+      throw new Error('AgentManager not initialized');
+    }
+    const session = agentManager.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+    
+    // Get tabId from AgentManager's mapping
+    const tabId = agentManager.getTabId(sessionId);
+    if (!tabId) {
+      throw new Error(`Session ${sessionId} has no associated tab`);
+    }
+    
+    // Navigate the tab
+    const success = tabManager!.navigate(tabId, url);
+    if (success) {
+      // Update session URL
+      const sessionManager = (agentManager as any).sessions.get(sessionId);
+      if (sessionManager) {
+        sessionManager.updateUrl(url);
+        agentManager.broadcastSessionUpdate(sessionManager.getSession()!);
+      }
+    }
+    
+    return { success };
+  });
+
+  // Show/hide BrowserView for a session
+  ipcMain.handle('agent:session-show-view', async (event, sessionId: string | null) => {
+    if (!agentManager || !tabManager) {
+      return { success: false };
+    }
+
+    // Hide all BrowserViews first
+    const allTabs = tabManager.getTabs();
+    for (const tab of allTabs) {
+      const view = (tabManager as any).views.get(tab.id);
+      if (view) {
+        // Hide by moving off-screen
+        view.setBounds({ x: -10000, y: -10000, width: 0, height: 0 });
+      }
+    }
+
+    // If a session is selected, show its BrowserView
+    if (sessionId) {
+      const session = agentManager.getSession(sessionId);
+      if (session && tabManager) {
+        const tabId = agentManager.getTabId(sessionId);
+        if (tabId) {
+          // Show the BrowserView for this session
+          const success = tabManager.switchToTab(tabId);
+          
+          // Initial bounds will be set by React's ResizeObserver
+          // But set a default position first
+          const view = (tabManager as any).views.get(tabId);
+          if (view) {
+            // Set initial bounds (will be updated by React)
+            const { width, height } = mainWindow.getContentBounds();
+            const headerHeight = 60;
+            const addressBarHeight = 48;
+            view.setBounds({
+              x: 0,
+              y: headerHeight + addressBarHeight,
+              width: Math.floor(width * 0.5),
+              height: height - headerHeight - addressBarHeight,
+            });
+          }
+          
+          // If session has a URL, navigate to it
+          if (session.url && session.url !== 'about:blank' && session.url !== '') {
+            // Small delay to ensure view is ready
+            setTimeout(() => {
+              if (tabManager) {
+                tabManager.navigate(tabId, session.url);
+              }
+            }, 100);
+          }
+          
+          return { success };
+        }
+      }
+    }
+
+    return { success: true };
+  });
+
+  // Update BrowserView bounds based on React div position/size
+  ipcMain.handle('agent:session-update-bounds', async (event, sessionId: string, bounds: { x: number; y: number; width: number; height: number }) => {
+    if (!agentManager || !tabManager) {
+      return { success: false };
+    }
+
+    const tabId = agentManager.getTabId(sessionId);
+    if (!tabId) {
+      return { success: false };
+    }
+
+    const view = (tabManager as any).views.get(tabId);
+    if (view) {
+      // Update BrowserView bounds to match React div
+      view.setBounds({
+        x: Math.round(bounds.x),
+        y: Math.round(bounds.y),
+        width: Math.round(bounds.width),
+        height: Math.round(bounds.height),
+      });
+      return { success: true };
+    }
+
+    return { success: false };
+  });
+
+  // Note: handleCreateSession is exported above for terminal command use
+  // Export handleCreateSession for use by terminal commands
+  return { tabManager, agentManager, handleCreateSession };
 }
 
 // Clean up function
