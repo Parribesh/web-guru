@@ -1,8 +1,10 @@
 import { app, BrowserWindow, Menu, dialog, globalShortcut } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import { setupIPC } from './ipc';
 import { createMainWindow } from './windows';
 import { setupAIService } from './ai';
+import { eventLogger } from './logging/event-logger';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -25,6 +27,18 @@ app.on('ready', async () => {
 
   // Create main window
   mainWindow = createMainWindow();
+
+  // Set up event logger
+  eventLogger.setMainWindow(mainWindow);
+  eventLogger.info('App', 'Application starting...');
+
+  // Reset main window zoom to 1.0 on startup
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('🖼️ React UI loaded, resetting zoom to 1.0');
+    mainWindow!.webContents.setZoomFactor(1.0);
+    mainWindow!.webContents.invalidate();
+    eventLogger.success('App', 'React UI loaded successfully');
+  });
 
   // Set up IPC handlers
   const tabsManager = setupIPC(mainWindow);
@@ -230,8 +244,19 @@ function setupApplicationMenu() {
 
 function handleZoom(delta: number) {
   console.log(`🎮 Zoom ${delta > 0 ? 'IN' : 'OUT'} handler called with delta: ${delta}`);
-  console.log('📊 tabsManager exists:', !!((globalThis as any).tabsManager));
+  
+  // Zoom the React UI (main window)
+  if (mainWindow) {
+    const currentZoom = mainWindow.webContents.getZoomFactor();
+    const newZoom = delta > 0 ?
+      Math.min(currentZoom + delta, 5.0) :
+      Math.max(currentZoom + delta, 0.1);
+    console.log(`🖼️ React UI zoom: ${currentZoom} → ${newZoom}`);
+    mainWindow.webContents.setZoomFactor(newZoom);
+    mainWindow.webContents.invalidate();
+  }
 
+  // Zoom the BrowserView (web content)
   const tabsManager = (globalThis as any).tabsManager;
   if (tabsManager) {
     console.log(`🎯 Calling zoomActiveTab with delta: ${delta}`);
@@ -243,13 +268,23 @@ function handleZoom(delta: number) {
 }
 
 function handleZoomReset() {
-  console.log('Zoom reset handler called');
+  console.log('🔄 Zoom reset handler called');
+  
+  // Reset React UI (main window) zoom
+  if (mainWindow) {
+    const currentZoom = mainWindow.webContents.getZoomFactor();
+    console.log(`🖼️ Resetting React UI zoom from ${currentZoom} to 1.0`);
+    mainWindow.webContents.setZoomFactor(1.0);
+    mainWindow.webContents.invalidate();
+  }
+
+  // Reset BrowserView (web content) zoom
   const tabsManager = (globalThis as any).tabsManager;
   if (tabsManager) {
     const success = tabsManager.resetZoomActiveTab();
-    console.log('Zoom reset success:', success);
+    console.log(`✅ BrowserView zoom reset success: ${success}`);
   } else {
-    console.log('tabsManager not available');
+    console.log('❌ tabsManager not available');
   }
 }
 

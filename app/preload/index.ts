@@ -88,6 +88,18 @@ const electronAPI = {
       ipcRenderer.invoke(IPCChannels.AI_REQUEST, request),
   },
 
+  // QA services
+  qa: {
+    ask: (request: { question: string; tabId: string; context?: { url: string; title: string } }) =>
+      ipcRenderer.invoke('qa:ask', request),
+  },
+
+  // Logging services
+  log: {
+    getEvents: () => ipcRenderer.invoke('log:get-events'),
+    clear: () => ipcRenderer.invoke('log:clear'),
+  },
+
   // Window management
   window: {
     minimize: () => ipcRenderer.invoke(IPCChannels.WINDOW_MINIMIZE),
@@ -134,10 +146,20 @@ const electronAPI = {
       "dom:extract",
       "command-palette:toggle",
       "ai:toggle-panel",
+      "log:event",
+      "log:clear",
     ];
 
     if (allowedChannels.includes(channel)) {
-      ipcRenderer.on(channel, callback);
+      // Wrap callback to forward only the data (not the IPC event object)
+      ipcRenderer.on(channel, (ipcEvent, ...args) => {
+        console.log(`[Preload] Received event on channel ${channel}:`, args.length, 'args');
+        // Forward only the data arguments to the callback
+        callback(...args);
+      });
+      console.log(`[Preload] Registered listener for channel: ${channel}`);
+    } else {
+      console.warn(`[Preload] Channel not allowed: ${channel}`);
     }
   },
 
@@ -166,81 +188,232 @@ function extractPageContent(): string {
   // Remove script and style elements
   const clonedDoc = document.cloneNode(true) as Document;
 
-  // Remove scripts and styles
-  const scripts = clonedDoc.querySelectorAll("script, style, noscript");
-  scripts.forEach((el: any) => (el as any).remove());
+  // Remove scripts, styles, and navigation/sidebar elements
+  const toRemove = clonedDoc.querySelectorAll(
+    "script, style, noscript, nav, aside, header, footer, " +
+    ".nav, .navigation, .sidebar, .menu, .sidebar-content, " +
+    ".mw-navigation, .vector-menu, .vector-page-toolbar, " +
+    ".infobox, .sidebar-box, .navbox, .vertical-navbox"
+  );
+  toRemove.forEach((el: any) => (el as any).remove());
 
-  // Extract text content from meaningful elements
-  const contentSelectors = [
-    "article",
-    "main",
-    '[role="main"]',
-    ".content",
-    ".post",
-    ".article",
-    "p",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "li",
-    "blockquote",
-  ];
-
+  // Try to find main content area first (Wikipedia, news sites, etc.)
   let content = "";
-
-  contentSelectors.forEach((selector) => {
-    const elements = clonedDoc.querySelectorAll(selector) as any;
-    elements.forEach((el: any) => {
+  
+  // Priority 1: Article or main content
+  const mainContent = clonedDoc.querySelector("article, main, [role='main'], #content, #mw-content-text, .mw-parser-output");
+  if (mainContent) {
+    // Remove navigation and sidebar elements from main content
+    const navElements = mainContent.querySelectorAll("nav, .nav, .navigation, .sidebar, .infobox, .navbox");
+    navElements.forEach((el: any) => (el as any).remove());
+    
+    // Extract text from main content (paragraphs, headings, lists)
+    const paragraphs = mainContent.querySelectorAll("p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt");
+    paragraphs.forEach((el: any) => {
       const text = (el.textContent as string | null)?.trim();
-      if (text && text.length > 20) {
-        // Only include substantial text
+      if (text && text.length > 30) { // Minimum 30 chars to avoid short labels
         content += text + "\n\n";
       }
     });
-  });
-
-  // Fallback to body text if no structured content found
-  if (!content.trim()) {
-    content = (clonedDoc as any).body?.textContent || "";
+    
+    // Extract table data - important for numerical data and statistics
+    const tables = mainContent.querySelectorAll("table");
+    tables.forEach((table: any) => {
+      const rows = table.querySelectorAll("tr");
+      if (rows.length > 0) {
+        content += "\n[Table Data]\n";
+        rows.forEach((row: any) => {
+          const cells = row.querySelectorAll("th, td");
+          if (cells.length > 0) {
+            const rowData = Array.from(cells).map((cell: any) => {
+              return (cell.textContent || '').trim();
+            }).filter(cell => cell.length > 0);
+            if (rowData.length > 0) {
+              content += rowData.join(" | ") + "\n";
+            }
+          }
+        });
+        content += "\n";
+      }
+    });
+    
+    // Extract stat boxes and highlighted numbers
+    const statBoxes = mainContent.querySelectorAll(".stat-box, .stat-number, [class*='stat'], [class*='number']");
+    statBoxes.forEach((box: any) => {
+      const text = (box.textContent as string | null)?.trim();
+      if (text && text.length > 5) {
+        content += text + "\n\n";
+      }
+    });
   }
 
-  // Clean up whitespace
+  // Priority 2: If no main content found, use structured selectors
+  if (!content.trim()) {
+    const contentSelectors = [
+      "article",
+      "main",
+      '[role="main"]',
+      ".content",
+      ".post",
+      ".article",
+      "p",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+    ];
+
+    contentSelectors.forEach((selector) => {
+      const elements = clonedDoc.querySelectorAll(selector) as any;
+      elements.forEach((el: any) => {
+        // Skip if element is in nav/sidebar
+        if (el.closest("nav, aside, .nav, .sidebar, .menu")) {
+          return;
+        }
+        
+        const text = (el.textContent as string | null)?.trim();
+        if (text && text.length > 30) {
+          content += text + "\n\n";
+        }
+      });
+    });
+  }
+
+  // Priority 3: Fallback to body text (filtered)
+  if (!content.trim()) {
+    const body = (clonedDoc as any).body;
+    if (body) {
+      // Remove navigation and sidebar from body
+      const navElements = body.querySelectorAll("nav, aside, .nav, .sidebar, .menu, header, footer");
+      navElements.forEach((el: any) => (el as any).remove());
+      
+      // Extract paragraphs and headings
+      const paragraphs = body.querySelectorAll("p, h1, h2, h3, h4, h5, h6");
+      paragraphs.forEach((el: any) => {
+        const text = (el.textContent as string | null)?.trim();
+        if (text && text.length > 30) {
+          content += text + "\n\n";
+        }
+      });
+      
+      // Extract tables from body as fallback
+      const tables = body.querySelectorAll("table");
+      tables.forEach((table: any) => {
+        const rows = table.querySelectorAll("tr");
+        if (rows.length > 0) {
+          content += "\n[Table Data]\n";
+          rows.forEach((row: any) => {
+            const cells = row.querySelectorAll("th, td");
+            if (cells.length > 0) {
+              const rowData = Array.from(cells).map((cell: any) => {
+                return (cell.textContent || '').trim();
+              }).filter(cell => cell.length > 0);
+              if (rowData.length > 0) {
+                content += rowData.join(" | ") + "\n";
+              }
+            }
+          });
+          content += "\n";
+        }
+      });
+    }
+  }
+
+  // Clean up whitespace and remove very short lines (likely navigation items)
   return content
+    .split("\n")
+    .filter(line => line.trim().length > 20) // Filter out short lines
+    .join("\n")
     .replace(/\s+/g, " ")
     .replace(/\n\s*\n/g, "\n\n")
     .trim();
 }
 
 // Auto-extract content when page loads (for AI analysis)
+// Only extract from actual web pages, not internal/UI pages
 if (typeof window !== 'undefined') {
-  window.addEventListener("load", async () => {
+  const extractAndSendContent = async () => {
     try {
+      const url = window.location.href.toLowerCase();
+      
+      // Skip internal/UI URLs - only process actual web pages
+      // But allow file:// URLs for dev sample in development mode
+      // Note: process.env may not be available in preload, so check for dev-sample.html
+      const isDevSampleFile = url.includes('dev-sample.html');
+      const isInternalUrl = 
+        url.startsWith('http://localhost') ||
+        url.startsWith('https://localhost') ||
+        url.startsWith('http://127.0.0.1') ||
+        url.startsWith('https://127.0.0.1') ||
+        url.startsWith('about:') ||
+        (url.startsWith('file://') && !isDevSampleFile) || // Allow dev sample file
+        url.startsWith('chrome://') ||
+        url.startsWith('chrome-extension://') ||
+        url === '' ||
+        url === 'about:blank';
+      
+      if (isInternalUrl) {
+        console.log(`[Preload] Skipping DOM extraction for internal URL: ${window.location.href}`);
+        return;
+      }
+      
+      console.log(`[Preload] Extracting DOM content for URL: ${window.location.href}`);
       const content = extractPageContent();
+      const wordCount = content ? content.trim().split(/\s+/).length : 0;
+      const tableCount = (content.match(/\[Table Data\]/g) || []).length;
+      console.log(`[Preload] Extracted ${wordCount} words from page, found ${tableCount} table(s)`);
+      
+      // Only send if we have meaningful content (more than just a few words)
+      if (!content || wordCount < 10) {
+        console.log(`[Preload] Skipping DOM extraction - insufficient content (${wordCount} words, need at least 10)`);
+        return;
+      }
+      
       const pageInfo = {
         url: window.location.href,
         title: document.title,
         selectedText: '' // Can't get selection in preload context
       };
 
+      console.log(`[Preload] Sending DOM content to main process: ${wordCount} words, title: "${pageInfo.title}"`);
       // Send to main process for AI processing
       await ipcRenderer.invoke(IPCChannels.DOM_CONTENT, {
         tabId: getCurrentTabId(), // TODO: Get actual tab ID
         content,
+        htmlContent: document.documentElement.outerHTML, // Include HTML for structure extraction
         url: pageInfo.url,
         title: pageInfo.title,
       });
+      console.log(`[Preload] DOM content sent successfully`);
     } catch (error) {
       console.error("Failed to extract DOM content:", error);
     }
+  };
+  
+  // Try multiple events - file:// URLs might not fire 'load' event reliably
+  window.addEventListener("load", extractAndSendContent);
+  document.addEventListener("DOMContentLoaded", () => {
+    console.log('[Preload] DOMContentLoaded event fired');
+    // For file:// URLs, DOMContentLoaded might fire before load
+    setTimeout(extractAndSendContent, 500);
   });
+  
+  // Fallback: if document is already ready, extract immediately
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    console.log('[Preload] Document already ready, extracting immediately');
+    setTimeout(extractAndSendContent, 500);
+  }
 }
 
-// Helper function to get current tab ID (placeholder)
+// Helper function to get current tab ID
 function getCurrentTabId(): string {
-  // TODO: Implement proper tab ID tracking
+  // Try to get tabId from window context (injected by main process)
+  if (typeof window !== 'undefined' && (window as any).__TAB_ID__) {
+    return (window as any).__TAB_ID__;
+  }
+  // Fallback to placeholder if not available
   return "current-tab";
 }
 

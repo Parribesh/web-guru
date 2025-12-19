@@ -4,6 +4,9 @@ import { AddressBar } from './components/AddressBar';
 import { AISidePanel } from './ai-ui/AISidePanel';
 import { AIChatPanel } from './ai-ui/AIChatPanel';
 import { CommandPalette } from './ai-ui/CommandPalette';
+import { QAPanel } from './ai-ui/QAPanel';
+import { EventLog } from './components/EventLog';
+import { EmbeddingProgress } from './components/EmbeddingProgress';
 import { Tab, AIRequest, AIResponse } from '../shared/types';
 import './index.css';
 
@@ -26,6 +29,9 @@ declare global {
       ai: {
         request: (request: AIRequest) => Promise<AIResponse>;
       };
+      qa: {
+        ask: (request: { question: string; tabId: string; context?: { url: string; title: string } }) => Promise<any>;
+      };
       window: {
         minimize: () => Promise<void>;
         maximize: () => Promise<void>;
@@ -42,6 +48,10 @@ declare global {
       on: (channel: string, callback: (...args: any[]) => void) => void;
       off: (channel: string, callback: (...args: any[]) => void) => void;
       sendAppEvent: (eventType: string, data: any) => void;
+      log: {
+        getEvents: () => Promise<any[]>;
+        clear: () => Promise<{ success: boolean }>;
+      };
     };
   }
 }
@@ -51,6 +61,7 @@ const App: React.FC = () => {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isEventLogOpen, setIsEventLogOpen] = useState(false);
   const [currentAIResponse, setCurrentAIResponse] = useState<AIResponse | null>(null);
   const [isAIProcessing, setIsAIProcessing] = useState(false);
   const [chatByTab, setChatByTab] = useState<Record<string, { from: 'user' | 'ai'; content: string }[]>>({});
@@ -66,10 +77,13 @@ const App: React.FC = () => {
       try {
         const { tabs: initialTabs, activeTabId: initialActiveTabId } =
           await window.electronAPI.tabs.getAll();
-        setTabs(initialTabs);
+        // Filter out any invalid tabs
+        const validTabs = (initialTabs || []).filter(tab => tab && tab.id);
+        setTabs(validTabs);
         setActiveTabId(initialActiveTabId);
       } catch (error) {
         console.error('Failed to initialize tabs:', error);
+        setTabs([]); // Set empty array on error
       }
     };
 
@@ -77,10 +91,17 @@ const App: React.FC = () => {
 
     // Set up IPC listeners
     const handleTabUpdate = (event: any, updatedTab: Tab) => {
+      if (!updatedTab || !updatedTab.id) {
+        console.warn('[App] Invalid tab update received:', updatedTab);
+        return;
+      }
+      console.log('[App] Received tab:update:', updatedTab.id, 'isLoading:', updatedTab.isLoading, 'url:', updatedTab.url?.substring(0, 50));
       setTabs(prevTabs =>
-        prevTabs.map(tab =>
-          tab.id === updatedTab.id ? { ...tab, ...updatedTab } : tab
-        )
+        prevTabs
+          .filter(tab => tab && tab.id) // Filter out any undefined/null tabs
+          .map(tab =>
+            tab.id === updatedTab.id ? { ...tab, ...updatedTab } : tab
+          )
       );
     };
 
@@ -206,10 +227,10 @@ const App: React.FC = () => {
     }
   };
 
-  const appendChat = (tabId: string, from: 'user' | 'ai', content: string) => {
+  const appendChat = (tabId: string, from: 'user' | 'ai', content: string, data?: any) => {
     setChatByTab(prev => ({
       ...prev,
-      [tabId]: [...(prev[tabId] || []), { from, content }]
+      [tabId]: [...(prev[tabId] || []), { from, content, data }]
     }));
   };
 
@@ -222,6 +243,7 @@ const App: React.FC = () => {
       const pageInfo = window.electronAPI.dom.getPageInfo();
       const enhancedRequest: AIRequest = {
         ...request,
+        tabId: activeTabId ?? undefined, // Pass the actual tabId (convert null to undefined)
         context: {
           url: pageInfo.url,
           title: pageInfo.title,
@@ -233,7 +255,12 @@ const App: React.FC = () => {
       setCurrentAIResponse(response);
       if (activeTabId) {
         if (response.success) {
-          appendChat(activeTabId, 'ai', response.content);
+          // Include metadata (chunks, source location, prompt) with the message
+          appendChat(activeTabId, 'ai', response.content, {
+            relevantChunks: response.relevantChunks,
+            sourceLocation: response.sourceLocation,
+            prompt: response.prompt,
+          });
         } else if (response.error) {
           appendChat(activeTabId, 'ai', `Error: ${response.error}`);
         }
@@ -259,10 +286,20 @@ const App: React.FC = () => {
     }
   };
 
+  const handleNewTask = () => {
+    if (activeTabId) {
+      setChatByTab(prev => ({ ...prev, [activeTabId]: [] }));
+    }
+  };
+
   const handleChatSend = async (text: string): Promise<AIResponse | null> => {
     if (!activeTabId) return null;
     appendChat(activeTabId, 'user', text);
-    const request: AIRequest = { type: 'chat', content: text };
+    const request: AIRequest = { 
+      type: 'chat', 
+      content: text,
+      tabId: activeTabId // activeTabId is guaranteed to be string here due to the check above
+    };
     return handleAIRequest(request);
   };
 
@@ -307,9 +344,16 @@ const App: React.FC = () => {
             onStop={handleStop}
           />
 
+          <EmbeddingProgress 
+            tabId={activeTabId} 
+            tabIsLoading={activeTab?.isLoading}
+            tabUrl={activeTab?.url}
+          />
+
           <AIChatPanel
             messages={activeChat}
             onSend={handleChatSend}
+            onNewTask={handleNewTask}
             isProcessing={isAIProcessing}
             hasActiveTab={!!activeTabId}
           />
@@ -324,6 +368,17 @@ const App: React.FC = () => {
         isProcessing={isAIProcessing}
       />
 
+      {/* QA Panel - Show when AI panel is open */}
+      {isAIPanelOpen && activeTabId && (
+        <div className="fixed right-0 top-0 h-full w-96 bg-white dark:bg-gray-800 shadow-xl z-40 overflow-y-auto p-4">
+          <QAPanel
+            tabId={activeTabId}
+            pageTitle={activeTab?.title}
+            pageUrl={activeTab?.url}
+          />
+        </div>
+      )}
+
       <CommandPalette
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
@@ -332,6 +387,11 @@ const App: React.FC = () => {
           console.log('Command executed:', command);
           setIsCommandPaletteOpen(false);
         }}
+      />
+
+      <EventLog
+        isOpen={isEventLogOpen}
+        onToggle={() => setIsEventLogOpen(!isEventLogOpen)}
       />
     </div>
   );

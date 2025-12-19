@@ -2,6 +2,7 @@ import { BrowserWindow, BrowserView } from 'electron';
 import { v4 as uuidv4 } from 'uuid'; // TODO: Add uuid dependency
 import { Tab } from '../shared/types';
 import { createBrowserView, updateBrowserViewBounds, setBrowserViewBounds } from './windows';
+import { eventLogger } from './logging/event-logger';
 import * as path from 'path';
 
 const BROWSER_UI_HEIGHT = 40; // space for top title bar only
@@ -18,8 +19,45 @@ export class TabManager {
     this.mainWindow = mainWindow;
     this.preloadPath = path.join(__dirname, '../../preload/preload/index.js');
 
-    // Create initial tab
-    this.createTab().catch(console.error);
+    // Create initial tab with default dev URL if in development
+    const isDev = process.env.NODE_ENV === 'development';
+    const defaultUrl = isDev ? this.getDevDefaultUrl() : undefined;
+    this.createTab(defaultUrl).catch(console.error);
+  }
+
+  private getDevDefaultUrl(): string {
+    // Use a local HTML file for development
+    // In compiled code, __dirname is dist/main/main/
+    // In source code, __dirname is app/main/
+    // We need to go up to the project root and then into app/
+    let devSamplePath: string;
+    
+    if (__dirname.includes('dist')) {
+      // Compiled: dist/main/main/ -> go up to project root, then app/
+      const projectRoot = path.resolve(__dirname, '../../../');
+      devSamplePath = path.join(projectRoot, 'app', 'dev-sample.html');
+    } else {
+      // Source: app/main/ -> go up to app/
+      devSamplePath = path.join(__dirname, '../dev-sample.html');
+    }
+    
+    const normalizedPath = path.resolve(devSamplePath);
+    console.log(`[TabManager] Dev sample path: ${normalizedPath}`);
+    console.log(`[TabManager] __dirname: ${__dirname}`);
+    
+    // Verify file exists
+    const fs = require('fs');
+    if (!fs.existsSync(normalizedPath)) {
+      console.error(`[TabManager] Dev sample file not found at: ${normalizedPath}`);
+      // Fallback: try to find it relative to process.cwd()
+      const fallbackPath = path.join(process.cwd(), 'app', 'dev-sample.html');
+      if (fs.existsSync(fallbackPath)) {
+        console.log(`[TabManager] Using fallback path: ${fallbackPath}`);
+        return `file://${path.resolve(fallbackPath)}`;
+      }
+    }
+    
+    return `file://${normalizedPath}`;
   }
 
   async createTab(url?: string): Promise<string> {
@@ -36,7 +74,7 @@ export class TabManager {
     this.tabs.set(tabId, tab);
 
     // Create BrowserView for this tab
-    const view = await createBrowserView(tab, this.preloadPath);
+    const view = await createBrowserView(tab, this.preloadPath, this.mainWindow);
     this.views.set(tabId, view);
 
     // Add view to window but don't show yet
@@ -46,6 +84,14 @@ export class TabManager {
     // If this is the first tab, make it active
     if (!this.activeTabId) {
       this.switchToTab(tabId);
+    }
+
+    // If URL was provided, navigate to it
+    if (url) {
+      // Small delay to ensure view is ready
+      setTimeout(() => {
+        this.navigate(tabId, url);
+      }, 100);
     }
 
     return tabId;
@@ -107,15 +153,19 @@ export class TabManager {
   navigate(tabId: string, url: string): boolean {
     const view = this.views.get(tabId);
     if (!view) {
+      eventLogger.error('Navigation', `Cannot navigate: View not found for tab ${tabId}`);
       return false;
     }
 
-    // Ensure URL has protocol
+    // Ensure URL has protocol (but preserve file:// URLs)
     let fullUrl = url;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('file://')) {
       fullUrl = `https://${url}`;
     }
 
+    eventLogger.info('Navigation', `Fetching article: ${fullUrl}`);
+    eventLogger.info('Navigation', `Tab ID: ${tabId}`);
+    
     view.webContents.loadURL(fullUrl);
     return true;
   }
@@ -172,6 +222,16 @@ export class TabManager {
     return this.activeTabId;
   }
 
+  // Find tabId by webContents (for IPC handlers)
+  getTabIdByWebContents(webContentsId: number): string | null {
+    for (const [tabId, view] of this.views.entries()) {
+      if (view.webContents.id === webContentsId) {
+        return tabId;
+      }
+    }
+    return null;
+  }
+
   updateTabInfo(tabId: string, updates: Partial<Tab>): boolean {
     const tab = this.tabs.get(tabId);
     if (!tab) {
@@ -210,28 +270,31 @@ export class TabManager {
           Math.max(currentZoom + delta, 0.1);
 
         console.log(`BrowserView zoom - setting to: ${newZoom}`);
+        
+        // AGGRESSIVE: Remove view, set zoom, re-add to force visual refresh
+        const currentBounds = activeView.getBounds();
+        this.mainWindow.removeBrowserView(activeView);
+        
+        // Set zoom while view is removed
         activeView.webContents.setZoomFactor(newZoom);
-
-        // Alternative: Try browser zoom via JavaScript
-        try {
-          activeView.webContents.executeJavaScript(`
-            document.body.style.zoom = '${newZoom * 100}%';
-            console.log('Applied CSS zoom:', '${newZoom * 100}%');
-          `).catch(err => console.log('CSS zoom failed:', err));
-        } catch (jsError) {
-          console.log('JavaScript zoom execution failed:', jsError);
-        }
-
-        // Simple visual refresh - no hiding/showing to avoid flicker
+        
+        // Re-add the view to force complete re-render
+        this.mainWindow.addBrowserView(activeView);
+        activeView.setBounds(currentBounds);
+        
+        // Force multiple refresh methods
         activeView.webContents.invalidate();
+        
+        // Force a repaint by toggling visibility
+        setTimeout(() => {
+          activeView.setBounds({ ...currentBounds, height: currentBounds.height - 1 });
+          setTimeout(() => {
+            activeView.setBounds(currentBounds);
+            activeView.webContents.invalidate();
+          }, 10);
+        }, 50);
 
         // Verify the zoom was set
-        setTimeout(() => {
-          const verifyZoom = activeView.webContents.getZoomFactor();
-          console.log(`BrowserView zoom - verified as: ${verifyZoom}`);
-        }, 100);
-
-        // Wait a bit and verify
         setTimeout(() => {
           const verifyZoom = activeView.webContents.getZoomFactor();
           console.log(`BrowserView zoom - verified as: ${verifyZoom}`);
@@ -251,15 +314,48 @@ export class TabManager {
   resetZoomActiveTab(): boolean {
     const activeTabId = this.getActiveTabId();
     if (!activeTabId) {
+      console.log('❌ No active tab to reset zoom');
       return false;
     }
 
     const activeView = this.views.get(activeTabId);
     if (!activeView) {
+      console.log('❌ No active BrowserView found for tab:', activeTabId);
       return false;
     }
 
+    const currentZoom = activeView.webContents.getZoomFactor();
+    console.log(`🔄 Resetting zoom from ${currentZoom} to 1.0`);
+    
+    // AGGRESSIVE: Remove view, reset zoom, re-add to force visual refresh
+    const currentBounds = activeView.getBounds();
+    this.mainWindow.removeBrowserView(activeView);
+    
+    // Set zoom to 1.0 while view is removed
     activeView.webContents.setZoomFactor(1.0);
+    
+    // Re-add the view to force complete re-render
+    this.mainWindow.addBrowserView(activeView);
+    activeView.setBounds(currentBounds);
+    
+    // Force visual refresh
+    activeView.webContents.invalidate();
+    
+    // Force a repaint by toggling bounds
+    setTimeout(() => {
+      activeView.setBounds({ ...currentBounds, height: currentBounds.height - 1 });
+      setTimeout(() => {
+        activeView.setBounds(currentBounds);
+        activeView.webContents.invalidate();
+      }, 10);
+    }, 50);
+    
+    // Verify the reset
+    setTimeout(() => {
+      const verifyZoom = activeView.webContents.getZoomFactor();
+      console.log(`✅ Zoom reset verified: ${verifyZoom}`);
+    }, 100);
+
     return true;
   }
 
