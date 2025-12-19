@@ -11,7 +11,11 @@ import {
 let tabManager: TabManager | null = null;
 
 export function setupIPC(mainWindow: BrowserWindow) {
+  console.log('Setting up IPC handlers');
   tabManager = new TabManager(mainWindow);
+  console.log('TabManager created, registering IPC handlers');
+
+  return tabManager;
 
   // Tab management
   ipcMain.handle(IPCChannels.CREATE_TAB, async (event, url?: string) => {
@@ -21,7 +25,7 @@ export function setupIPC(mainWindow: BrowserWindow) {
   });
 
   ipcMain.handle(IPCChannels.CLOSE_TAB, async (event, tabId: string) => {
-    const success = tabManager!.closeTab(tabId);
+    const success = await tabManager!.closeTab(tabId);
     const tabs = tabManager!.getTabs();
     const activeTabId = tabManager!.getActiveTabId();
     return { success, tabs, activeTabId };
@@ -75,9 +79,9 @@ export function setupIPC(mainWindow: BrowserWindow) {
 
   // DOM content extraction (from preload)
   ipcMain.handle(IPCChannels.DOM_CONTENT, async (event, data: { tabId: string; content: string; url: string; title: string }) => {
+    console.log(`DOM_CONTENT IPC handler called for tab ${data.tabId}: ${data.title}`);
     // Store or process DOM content for AI analysis
     // TODO: Implement content storage/caching
-    console.log(`Received DOM content for tab ${data.tabId}: ${data.title}`);
     return { success: true };
   });
 
@@ -116,6 +120,7 @@ export function setupIPC(mainWindow: BrowserWindow) {
 
   // Handle renderer requests for current state
   ipcMain.handle('get-tabs', async () => {
+    console.log('get-tabs IPC handler called');
     return {
       tabs: tabManager!.getTabs(),
       activeTabId: tabManager!.getActiveTabId()
@@ -133,6 +138,22 @@ export function setupIPC(mainWindow: BrowserWindow) {
 
   ipcMain.on('validate-channel', (event, channel: string) => {
     event.returnValue = allowedChannels.has(channel as IPCChannels);
+  });
+
+  // Handle zoom commands from preload script
+  ipcMain.on('zoom-in', () => {
+    console.log('Zoom in from preload');
+    tabManager?.zoomActiveTab(0.1);
+  });
+
+  ipcMain.on('zoom-out', () => {
+    console.log('Zoom out from preload');
+    tabManager?.zoomActiveTab(-0.1);
+  });
+
+  ipcMain.on('zoom-reset', () => {
+    console.log('Zoom reset from preload');
+    tabManager?.resetZoomActiveTab();
   });
 
   // Handle app-level events from renderer

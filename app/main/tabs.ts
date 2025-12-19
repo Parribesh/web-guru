@@ -1,25 +1,11 @@
 import { BrowserWindow, BrowserView } from 'electron';
 import { v4 as uuidv4 } from 'uuid'; // TODO: Add uuid dependency
 import { Tab } from '../shared/types';
-import { createBrowserView, updateBrowserViewBounds } from './windows';
+import { createBrowserView, updateBrowserViewBounds, setBrowserViewBounds } from './windows';
 import * as path from 'path';
 
 const BROWSER_UI_HEIGHT = 40; // space for top title bar only
 const VIEWPORT_RATIO = 0.5; // left half for page, right half for agent/chat
-
-function setViewBounds(mainWindow: BrowserWindow, view: BrowserView) {
-  // Use content bounds (excludes frame/title) to size the view
-  const { width, height } = mainWindow.getContentBounds();
-  const availableHeight = Math.max(0, height - BROWSER_UI_HEIGHT);
-  const viewportWidth = Math.max(0, Math.floor(width * VIEWPORT_RATIO));
-
-  updateBrowserViewBounds(view, {
-    x: 0,
-    y: BROWSER_UI_HEIGHT,
-    width: viewportWidth,
-    height: availableHeight,
-  });
-}
 
 export class TabManager {
   private tabs: Map<string, Tab> = new Map();
@@ -33,10 +19,10 @@ export class TabManager {
     this.preloadPath = path.join(__dirname, '../../preload/preload/index.js');
 
     // Create initial tab
-    this.createTab();
+    this.createTab().catch(console.error);
   }
 
-  createTab(url?: string): string {
+  async createTab(url?: string): Promise<string> {
     const tabId = uuidv4();
     const tab: Tab = {
       id: tabId,
@@ -50,12 +36,12 @@ export class TabManager {
     this.tabs.set(tabId, tab);
 
     // Create BrowserView for this tab
-    const view = createBrowserView(tab, this.preloadPath);
+    const view = await createBrowserView(tab, this.preloadPath);
     this.views.set(tabId, view);
 
     // Add view to window but don't show yet
     this.mainWindow.addBrowserView(view);
-    setViewBounds(this.mainWindow, view);
+    setBrowserViewBounds(view, this.mainWindow);
 
     // If this is the first tab, make it active
     if (!this.activeTabId) {
@@ -65,7 +51,7 @@ export class TabManager {
     return tabId;
   }
 
-  closeTab(tabId: string): boolean {
+  async closeTab(tabId: string): Promise<boolean> {
     if (!this.tabs.has(tabId)) {
       return false;
     }
@@ -87,7 +73,7 @@ export class TabManager {
         this.switchToTab(remainingTabs[0]);
       } else {
         // Create new tab if no tabs left
-        this.createTab();
+        this.createTab().catch(console.error);
       }
     }
 
@@ -112,7 +98,7 @@ export class TabManager {
     if (newView) {
       this.mainWindow.addBrowserView(newView);
       this.activeTabId = tabId;
-      setViewBounds(this.mainWindow, newView);
+      setBrowserViewBounds(newView, this.mainWindow);
     }
 
     return true;
@@ -196,12 +182,93 @@ export class TabManager {
     return true;
   }
 
+  zoomActiveTab(delta: number): boolean {
+    const activeTabId = this.getActiveTabId();
+    if (!activeTabId) {
+      return false;
+    }
+
+    const activeView = this.views.get(activeTabId);
+    if (!activeView) {
+      return false;
+    }
+
+    // Method 1: Try BrowserView zoom
+    try {
+      console.log(`Attempting BrowserView zoom, delta: ${delta}`);
+
+      // Check if page is loaded
+      const url = activeView.webContents.getURL();
+      console.log(`Current URL: ${url}`);
+
+      if (url) { // Allow zooming on any URL including about:blank for testing
+        const currentZoom = activeView.webContents.getZoomFactor();
+        console.log(`BrowserView zoom - current: ${currentZoom}`);
+
+        const newZoom = delta > 0 ?
+          Math.min(currentZoom + delta, 5.0) :
+          Math.max(currentZoom + delta, 0.1);
+
+        console.log(`BrowserView zoom - setting to: ${newZoom}`);
+        activeView.webContents.setZoomFactor(newZoom);
+
+        // Alternative: Try browser zoom via JavaScript
+        try {
+          activeView.webContents.executeJavaScript(`
+            document.body.style.zoom = '${newZoom * 100}%';
+            console.log('Applied CSS zoom:', '${newZoom * 100}%');
+          `).catch(err => console.log('CSS zoom failed:', err));
+        } catch (jsError) {
+          console.log('JavaScript zoom execution failed:', jsError);
+        }
+
+        // Simple visual refresh - no hiding/showing to avoid flicker
+        activeView.webContents.invalidate();
+
+        // Verify the zoom was set
+        setTimeout(() => {
+          const verifyZoom = activeView.webContents.getZoomFactor();
+          console.log(`BrowserView zoom - verified as: ${verifyZoom}`);
+        }, 100);
+
+        // Wait a bit and verify
+        setTimeout(() => {
+          const verifyZoom = activeView.webContents.getZoomFactor();
+          console.log(`BrowserView zoom - verified as: ${verifyZoom}`);
+        }, 100);
+
+        return true;
+      } else {
+        console.log('Cannot zoom - no content loaded or about:blank');
+        return false;
+      }
+    } catch (error) {
+      console.error('BrowserView zoom failed:', error);
+      return false;
+    }
+  }
+
+  resetZoomActiveTab(): boolean {
+    const activeTabId = this.getActiveTabId();
+    if (!activeTabId) {
+      return false;
+    }
+
+    const activeView = this.views.get(activeTabId);
+    if (!activeView) {
+      return false;
+    }
+
+    activeView.webContents.setZoomFactor(1.0);
+    return true;
+  }
+
   // Handle window resize
   onWindowResize(width: number, height: number) {
     if (this.activeTabId) {
       const view = this.views.get(this.activeTabId);
       if (view) {
-        setViewBounds(this.mainWindow, view);
+        setBrowserViewBounds(view, this.mainWindow);
       }
     }
   }

@@ -3,9 +3,61 @@
 /* eslint-env browser */
 /* global window, document */
 import { contextBridge, ipcRenderer } from "electron";
-// Explicit .js extension to ensure Node resolves built file at runtime
-// Explicit .js extension so runtime can resolve built file in dist/preload/shared
-import { IPCChannels, AIRequest, AIResponse, Tab } from "../shared/types.js";
+
+// Define types directly to avoid import issues in sandboxed VM
+interface Tab {
+  id: string;
+  url: string;
+  title: string;
+  favicon?: string;
+  isLoading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
+interface AIRequest {
+  type: 'summarize' | 'analyze' | 'chat' | 'extract';
+  content: string;
+  context?: {
+    url: string;
+    title: string;
+    selectedText?: string;
+  };
+  options?: Record<string, any>;
+}
+
+interface AIResponse {
+  success: boolean;
+  content: string;
+  metadata?: {
+    tokens?: number;
+    model?: string;
+    processingTime?: number;
+  };
+  error?: string;
+}
+
+enum IPCChannels {
+  CREATE_TAB = 'tab:create',
+  CLOSE_TAB = 'tab:close',
+  SWITCH_TAB = 'tab:switch',
+  UPDATE_TAB = 'tab:update',
+  NAVIGATE = 'navigate',
+  GO_BACK = 'go-back',
+  GO_FORWARD = 'go-forward',
+  RELOAD = 'reload',
+  STOP_LOADING = 'stop-loading',
+  AI_REQUEST = 'ai:request',
+  AI_RESPONSE = 'ai:response',
+  EXTRACT_DOM = 'dom:extract',
+  DOM_CONTENT = 'dom:content',
+  WINDOW_MINIMIZE = 'window:minimize',
+  WINDOW_MAXIMIZE = 'window:maximize',
+  WINDOW_CLOSE = 'window:close',
+  WINDOW_RESIZE = 'window:resize',
+  OPEN_DEV_TOOLS = 'dev-tools:open',
+  CLOSE_DEV_TOOLS = 'dev-tools:close'
+}
 
 // Security: Only expose specific, safe APIs to the renderer
 const electronAPI = {
@@ -100,7 +152,14 @@ const electronAPI = {
 };
 
 // Expose the API to the renderer process
-contextBridge.exposeInMainWorld("electronAPI", electronAPI);
+// contextBridge may not be available in all contexts (like BrowserViews)
+try {
+  if (typeof contextBridge !== 'undefined') {
+    contextBridge.exposeInMainWorld("electronAPI", electronAPI);
+  }
+} catch (error) {
+  console.warn('contextBridge not available in this context');
+}
 
 // DOM content extraction functions
 function extractPageContent(): string {
@@ -156,22 +215,28 @@ function extractPageContent(): string {
 }
 
 // Auto-extract content when page loads (for AI analysis)
-window.addEventListener("load", async () => {
-  try {
-    const content = extractPageContent();
-    const pageInfo = electronAPI.dom.getPageInfo();
+if (typeof window !== 'undefined') {
+  window.addEventListener("load", async () => {
+    try {
+      const content = extractPageContent();
+      const pageInfo = {
+        url: window.location.href,
+        title: document.title,
+        selectedText: '' // Can't get selection in preload context
+      };
 
-    // Send to main process for AI processing
-    await ipcRenderer.invoke(IPCChannels.DOM_CONTENT, {
-      tabId: getCurrentTabId(), // TODO: Get actual tab ID
-      content,
-      url: pageInfo.url,
-      title: pageInfo.title,
-    });
-  } catch (error) {
-    console.error("Failed to extract DOM content:", error);
-  }
-});
+      // Send to main process for AI processing
+      await ipcRenderer.invoke(IPCChannels.DOM_CONTENT, {
+        tabId: getCurrentTabId(), // TODO: Get actual tab ID
+        content,
+        url: pageInfo.url,
+        title: pageInfo.title,
+      });
+    } catch (error) {
+      console.error("Failed to extract DOM content:", error);
+    }
+  });
+}
 
 // Helper function to get current tab ID (placeholder)
 function getCurrentTabId(): string {
@@ -179,20 +244,39 @@ function getCurrentTabId(): string {
   return "current-tab";
 }
 
-// Handle keyboard shortcuts
-document.addEventListener("keydown", (event: any) => {
-  // Command palette shortcut
-  if ((event.ctrlKey || event.metaKey) && event.key === "k") {
-    event.preventDefault();
-    ipcRenderer.send("command-palette:toggle");
-  }
+// Handle keyboard shortcuts (only if document is available)
+if (typeof document !== 'undefined') {
+  document.addEventListener("keydown", (event: any) => {
+    // Command palette shortcut
+    if ((event.ctrlKey || event.metaKey) && event.key === "k") {
+      event.preventDefault();
+      ipcRenderer.send("command-palette:toggle");
+    }
 
-  // AI panel toggle
-  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === "A") {
-    event.preventDefault();
-    ipcRenderer.send("ai:toggle-panel");
-  }
-});
+    // AI panel toggle
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === "A") {
+      event.preventDefault();
+      ipcRenderer.send("ai:toggle-panel");
+    }
+
+    // Zoom shortcuts (fallback if global shortcuts don't work)
+    if ((event.ctrlKey || event.metaKey)) {
+      if (event.key === "=" || event.key === "+") {
+        console.log('Preload: Zoom in triggered, preventing default');
+        event.preventDefault();
+        ipcRenderer.send("zoom-in");
+      } else if (event.key === "-") {
+        console.log('Preload: Zoom out triggered, preventing default');
+        event.preventDefault();
+        ipcRenderer.send("zoom-out");
+      } else if (event.key === "0") {
+        console.log('Preload: Zoom reset triggered, preventing default');
+        event.preventDefault();
+        ipcRenderer.send("zoom-reset");
+      }
+    }
+  });
+}
 
 // Export types for TypeScript
 declare global {
