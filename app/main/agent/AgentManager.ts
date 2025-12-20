@@ -76,6 +76,97 @@ export class AgentManager extends EventEmitter {
     }, 500);
   }
 
+  /**
+   * Ask a question to a session-specific agent using RAG system
+   * This method:
+   * 1. Gets the tabId for this session
+   * 2. Uses the RAG/QA system to answer using cached chunks for that tab
+   * 3. Updates the session with the response
+   * 4. Broadcasts updates to UI in real-time
+   */
+  async askQuestion(sessionId: string, question: string): Promise<{
+    success: boolean;
+    answer?: string;
+    error?: string;
+    relevantChunks?: any[];
+    prompt?: string;
+  }> {
+    const sessionManager = this.sessions.get(sessionId);
+    if (!sessionManager) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    // Get tabId for this session
+    const tabId = this.sessionTabMap.get(sessionId);
+    if (!tabId) {
+      throw new Error(`Session ${sessionId} has no associated tab`);
+    }
+
+    const session = sessionManager.getSession()!;
+    
+    // Add user message and update state
+    sessionManager.addMessage(MessageRole.USER, question);
+    sessionManager.updateState(AgentState.THINKING);
+    this.broadcastSessionUpdate(sessionManager.getSession()!);
+
+    try {
+      // Import QA service dynamically
+      const { answerQuestion } = await import('../rag/qa-service');
+      
+      // Create QA request using tabId (which has the cached content)
+      const qaRequest = {
+        question,
+        tabId,
+        context: {
+          url: session.url || '',
+          title: session.title || ''
+        }
+      };
+
+      // Get answer from RAG system
+      const qaResponse = await answerQuestion(qaRequest);
+
+      // Update session with response
+      if (qaResponse.success) {
+        sessionManager.addMessage(MessageRole.ASSISTANT, qaResponse.answer);
+        
+        // Store additional data in the last message
+        const session = sessionManager.getSession()!;
+        const lastMessage = session.messages[session.messages.length - 1];
+        if (lastMessage) {
+          (lastMessage as any).data = {
+            relevantChunks: qaResponse.relevantChunks,
+            sourceLocation: qaResponse.sourceLocation,
+            prompt: qaResponse.prompt
+          };
+        }
+      } else {
+        sessionManager.addMessage(MessageRole.ASSISTANT, qaResponse.error || 'Failed to get response');
+      }
+
+      sessionManager.updateState(AgentState.IDLE);
+      this.broadcastSessionUpdate(sessionManager.getSession()!);
+
+      return {
+        success: qaResponse.success,
+        answer: qaResponse.answer,
+        error: qaResponse.error,
+        relevantChunks: qaResponse.relevantChunks,
+        prompt: qaResponse.prompt
+      };
+    } catch (error: any) {
+      const errorMessage = error.message || 'Unknown error';
+      sessionManager.addMessage(MessageRole.ASSISTANT, `Error: ${errorMessage}`);
+      sessionManager.updateState(AgentState.IDLE);
+      this.broadcastSessionUpdate(sessionManager.getSession()!);
+      
+      return {
+        success: false,
+        error: errorMessage
+      };
+    }
+  }
+
   updateSessionState(sessionId: string, state: AgentState): void {
     const sessionManager = this.sessions.get(sessionId);
     if (!sessionManager) return;
@@ -121,7 +212,9 @@ export class AgentManager extends EventEmitter {
     
     // Send to renderer via IPC (must be serializable)
     const serialized = this.serializeSession(session);
+    console.log(`[AgentManager] Broadcasting session update for: ${session.id} (${session.messages.length} messages, state: ${session.state})`);
     this.mainWindow.webContents.send('agent:session-updated', serialized);
+    console.log(`[AgentManager] ✅ Event sent to renderer via IPC`);
   }
 
   // Clean up on window close

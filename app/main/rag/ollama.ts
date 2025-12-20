@@ -3,9 +3,11 @@ import { QARequest, QAResponse, RetrievedContext } from '../../shared/types';
 import { eventLogger } from '../logging/event-logger';
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-// Use faster model by default - can be overridden with AI_MODEL env var
-// Fast options: llama3.2:1b (fastest), phi3:mini, gemma2:2b, qwen2:1.5b
-const MODEL_NAME = process.env.AI_MODEL || 'qwen2:1.5b'; // Using qwen2:1.5b for fast data extraction
+// Use fastest small model by default - can be overridden with AI_MODEL env var
+// For RAG tasks, we only need to extract info from chunks, so smallest = fastest
+// Priority: llama3.2:1b (fastest, 1B params) > qwen2:1.5b (1.5B params) > phi3:mini (3.8B params)
+const DEFAULT_MODEL = process.env.AI_MODEL || 'llama3.2:1b'; // Smallest model for fastest inference
+let activeModel = DEFAULT_MODEL; // Will be set during initialization
 
 export async function checkOllamaConnection(): Promise<boolean> {
   try {
@@ -123,20 +125,40 @@ export async function ensureModelLoaded(): Promise<void> {
     }
     
     const models = response.data.models || [];
-    const modelExists = models.some((m: any) => m.name === MODEL_NAME);
+    const modelExists = models.some((m: any) => m.name === DEFAULT_MODEL);
 
     if (!modelExists) {
-      eventLogger.info('Ollama', `Model ${MODEL_NAME} not found, pulling...`);
-      await axios.post(`${workingUrl}/api/pull`, {
-        name: MODEL_NAME,
-        stream: false,
-      }, {
-        timeout: 300000, // 5 minutes for model download
-        validateStatus: () => true,
-      });
-      eventLogger.success('Ollama', `Model ${MODEL_NAME} loaded`);
+      // Try fallback models in order of speed (smallest first)
+      const fallbackModels = ['qwen2:1.5b', 'phi3:mini', 'gemma2:2b'];
+      let foundModel = DEFAULT_MODEL;
+      
+      for (const fallback of fallbackModels) {
+        const fallbackExists = models.some((m: any) => m.name === fallback);
+        if (fallbackExists) {
+          foundModel = fallback;
+          activeModel = fallback;
+          eventLogger.info('Ollama', `Using fallback model: ${fallback} (${DEFAULT_MODEL} not found)`);
+          eventLogger.info('Ollama', `${fallback} is available and will be used for faster inference`);
+          break;
+        }
+      }
+      
+      if (foundModel === DEFAULT_MODEL) {
+        eventLogger.info('Ollama', `Model ${DEFAULT_MODEL} not found, pulling...`);
+        eventLogger.info('Ollama', 'This is the smallest/fastest model (1B params) for RAG tasks');
+        await axios.post(`${workingUrl}/api/pull`, {
+          name: DEFAULT_MODEL,
+          stream: false,
+        }, {
+          timeout: 300000, // 5 minutes for model download
+          validateStatus: () => true,
+        });
+        activeModel = DEFAULT_MODEL;
+        eventLogger.success('Ollama', `Model ${DEFAULT_MODEL} loaded and ready`);
+      }
     } else {
-      eventLogger.success('Ollama', `Model ${MODEL_NAME} is already available`);
+      activeModel = DEFAULT_MODEL;
+      eventLogger.success('Ollama', `Model ${DEFAULT_MODEL} is already available (fastest for RAG - 1B params)`);
     }
   } catch (error: any) {
     eventLogger.error('Ollama', 'Failed to ensure model is loaded', error.message || error);
@@ -170,18 +192,20 @@ export async function generateAnswer(
       const response = await axios.post(
         `${url}/api/generate`,
         {
-          model: MODEL_NAME,
+          model: activeModel, // Use the model selected during initialization
           prompt,
           stream: false,
           options: {
-            temperature: 0.3, // Reduced from 0.7 for faster, more focused responses
-            top_p: 0.9,
-            num_predict: 200, // Limit response length to ~200 tokens for faster generation
-            num_ctx: 2048, // Limit context window to reduce processing time
+            temperature: 0.2, // Lower temperature for faster, more deterministic responses
+            top_p: 0.8, // Reduced for faster sampling
+            num_predict: 150, // Reduced from 200 to 150 tokens for faster generation
+            num_ctx: 1536, // Reduced from 2048 to 1536 to speed up processing
+            top_k: 20, // Limit top-k sampling for faster inference
+            repeat_penalty: 1.1, // Prevent repetition without slowing down
           },
         },
         {
-          timeout: 30000, // Reduced from 60s to 30s timeout
+          timeout: 20000, // Reduced from 30s to 20s timeout for faster failure detection
           validateStatus: () => true, // Don't throw on HTTP errors
         }
       );
@@ -225,8 +249,8 @@ function estimateTokens(text: string): number {
 // Limit chunk content to prevent prompt from being too long
 // Ollama has a context limit, so we need to be conservative
 // Reduced for faster responses
-const MAX_PROMPT_TOKENS = 2000; // Reduced from 3000 for faster processing
-const MAX_CHARS_PER_CHUNK = 400; // ~100 tokens per chunk max (matches chunking size)
+const MAX_PROMPT_TOKENS = 1200; // Reduced from 2000 to 1200 for much faster processing
+const MAX_CHARS_PER_CHUNK = 800; // ~200 tokens per chunk max (matches chunking size - increased from 400)
 
 export function buildQAPrompt(
   question: string,
@@ -235,32 +259,14 @@ export function buildQAPrompt(
 ): string {
   // Limit chunks and truncate content to fit within token budget
   let totalChars = 0;
-  const questionAndInstructions = `You are an AI assistant answering questions based on specific content from a web page.
+  // More concise prompt for faster processing
+  const questionAndInstructions = `Answer this question using ONLY the content below. Be concise and accurate.
 
-PAGE INFORMATION:
-Title: ${pageMetadata.title}
-URL: ${pageMetadata.url}
+Question: ${question}
+Page: ${pageMetadata.title}
 
-USER QUESTION:
-${question}
-
-RELEVANT CONTENT FROM THE PAGE (use this information to answer):
-
-INSTRUCTIONS:
-1. Answer the question DIRECTLY and ONLY using the relevant content provided above
-2. Do NOT make up information or use knowledge outside of the provided content
-3. If the content doesn't fully answer the question, say so explicitly
-4. When answering questions about numbers, statistics, or data:
-   - Use the EXACT numbers from the content
-   - Include units (billions, percentages, etc.) when provided
-   - Reference the specific table or section where the data appears
-   - If multiple numbers are mentioned, be specific about which one answers the question
-5. Quote or reference specific parts of the content when relevant
-6. Be accurate, concise, and cite which section you're using when helpful
-7. For table data, read the table rows carefully and match the question to the correct row/column
-8. If the content is about something completely different from the question, clearly state that the content doesn't address the question
-
-Answer based ONLY on the content above:`;
+Content:
+`;
 
   // Reduced available chars for faster processing
   const availableChars = (MAX_PROMPT_TOKENS * 3) - questionAndInstructions.length - 300; // Reduced safety margin
@@ -291,10 +297,7 @@ Answer based ONLY on the content above:`;
 
   const chunksText = limitedChunks.join('\n---\n\n');
   
-  const finalPrompt = questionAndInstructions.replace(
-    'RELEVANT CONTENT FROM THE PAGE (use this information to answer):\n',
-    `RELEVANT CONTENT FROM THE PAGE (use this information to answer):\n${chunksText}`
-  );
+  const finalPrompt = questionAndInstructions + chunksText + '\n\nAnswer:';
   
   const estimatedTokens = estimateTokens(finalPrompt);
   eventLogger.info('Ollama', `Prompt size: ~${estimatedTokens} tokens (${finalPrompt.length} chars), using ${limitedChunks.length}/${context.primaryChunks.length} chunks`);

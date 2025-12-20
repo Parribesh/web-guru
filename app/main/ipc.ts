@@ -4,6 +4,7 @@ import { processAIRequest } from './ai';
 import { cachePageContent } from './rag/qa-service';
 import { eventLogger } from './logging/event-logger';
 import { AgentManager } from './agent/AgentManager';
+import { MessageRole, AgentState } from './agent/types';
 import {
   IPCChannels,
   AIRequest,
@@ -15,11 +16,23 @@ import {
 let tabManager: TabManager | null = null;
 let agentManager: AgentManager | null = null;
 
+// Export getters for accessing managers (for use in other modules)
+export function getTabManager(): TabManager | null {
+  return tabManager;
+}
+
+export function getAgentManager(): AgentManager | null {
+  return agentManager;
+}
+
 export function setupIPC(mainWindow: BrowserWindow) {
   console.log('Setting up IPC handlers');
   tabManager = new TabManager(mainWindow);
   agentManager = new AgentManager(mainWindow, tabManager);
   console.log('TabManager and AgentManager created, registering IPC handlers');
+  
+  // Export handleCreateSession for use by terminal commands
+  // This will be returned at the end of the function
 
   // Tab management
   ipcMain.handle(IPCChannels.CREATE_TAB, async (event, url?: string) => {
@@ -301,12 +314,88 @@ export function setupIPC(mainWindow: BrowserWindow) {
     });
   });
 
+  // Get all session IDs (lightweight endpoint for CLI usage)
+  ipcMain.handle('agent:get-session-ids', async () => {
+    if (!agentManager) {
+      throw new Error('AgentManager not initialized');
+    }
+    const sessions = agentManager.getAllSessions();
+    return sessions.map(session => ({
+      id: session.id,
+      title: session.title,
+      url: session.url,
+      state: session.state,
+      messageCount: session.messages.length
+    }));
+  });
+
   ipcMain.handle('agent:send-message', async (event, sessionId: string, content: string) => {
     if (!agentManager) {
       throw new Error('AgentManager not initialized');
     }
-    agentManager.sendMessage(sessionId, content);
-    return { success: true };
+    // Get tabId for this session
+    const tabId = agentManager.getTabId(sessionId);
+    if (!tabId) {
+      throw new Error(`Session ${sessionId} has no associated tab`);
+    }
+    
+    // Use the RAG/QA system to process the message
+    const qaRequest: QARequest = {
+      question: content,
+      tabId: tabId,
+      context: {
+        url: agentManager.getSession(sessionId)?.url || '',
+        title: agentManager.getSession(sessionId)?.title || ''
+      }
+    };
+    
+    try {
+      // Import QA service
+      const { answerQuestion } = await import('./rag/qa-service');
+      const qaResponse = await answerQuestion(qaRequest);
+      
+      // Update session with response
+      const sessionManager = (agentManager as any).sessions.get(sessionId);
+      if (sessionManager) {
+        // Add user message
+        sessionManager.addMessage(MessageRole.USER, content);
+        sessionManager.updateState(AgentState.THINKING);
+        agentManager.broadcastSessionUpdate(sessionManager.getSession()!);
+        
+        // Add AI response
+        if (qaResponse.success) {
+          sessionManager.addMessage(MessageRole.ASSISTANT, qaResponse.answer);
+          // Store additional data in message metadata
+          const session = sessionManager.getSession()!;
+          const lastMessage = session.messages[session.messages.length - 1];
+          if (lastMessage) {
+            (lastMessage as any).data = {
+              relevantChunks: qaResponse.relevantChunks,
+              sourceLocation: qaResponse.sourceLocation,
+              prompt: qaResponse.prompt
+            };
+          }
+        } else {
+          sessionManager.addMessage(MessageRole.ASSISTANT, qaResponse.error || 'Failed to get response');
+        }
+        sessionManager.updateState(AgentState.IDLE);
+        agentManager.broadcastSessionUpdate(sessionManager.getSession()!);
+      }
+      
+      return { success: true };
+    } catch (error: any) {
+      console.error('Error processing message with RAG:', error);
+      // Fallback to placeholder
+      agentManager.sendMessage(sessionId, content);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('agent:get-tab-id', async (event, sessionId: string) => {
+    if (!agentManager) {
+      throw new Error('AgentManager not initialized');
+    }
+    return agentManager.getTabId(sessionId);
   });
 
   ipcMain.handle('agent:delete-session', async (event, sessionId: string) => {

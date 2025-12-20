@@ -1,7 +1,8 @@
 import { app, BrowserWindow, Menu, dialog, globalShortcut } from "electron";
 import * as path from "path";
 import * as fs from "fs";
-import { setupIPC } from "./ipc";
+import * as net from "net";
+import { setupIPC, getTabManager, getAgentManager } from "./ipc";
 import { createMainWindow } from "./windows";
 import { setupAIService } from "./ai";
 import { eventLogger } from "./logging/event-logger";
@@ -55,99 +56,8 @@ app.on("ready", async () => {
   // Register global shortcuts (after tabsManager is available)
   setupGlobalShortcuts();
 
-  // Monitor for external commands via file
-  // Use __dirname to find project root (more reliable than process.cwd())
-  const projectRoot = __dirname.includes("dist")
-    ? path.resolve(__dirname, "../../..")
-    : path.resolve(__dirname, "../..");
-  const commandFile = path.join(projectRoot, "app-command.json");
-  const zoomCommandFile = path.join(projectRoot, "zoom-command.txt");
-
-  console.log("📁 Command file paths:", {
-    commandFile,
-    zoomCommandFile,
-    projectRoot,
-  });
-
-  setInterval(async () => {
-    try {
-      // Handle zoom commands (legacy format)
-      if (fs.existsSync(zoomCommandFile)) {
-        const command = fs.readFileSync(zoomCommandFile, "utf8").trim();
-        if (command === "reset") {
-          console.log("📨 External zoom reset command received");
-          const tabsManager = (globalThis as any).tabsManager;
-          if (tabsManager && tabsManager.resetZoomActiveTab) {
-            tabsManager.resetZoomActiveTab();
-            console.log("✅ External zoom reset executed");
-          }
-          fs.unlinkSync(zoomCommandFile);
-        }
-      }
-
-      // Handle app commands (JSON format)
-      if (fs.existsSync(commandFile)) {
-        const commandData = fs.readFileSync(commandFile, "utf8").trim();
-        if (commandData) {
-          try {
-            const command = JSON.parse(commandData);
-            console.log("📨 External command received:", command);
-
-            if (command.type === "create-session") {
-              // Use the same IPC handler function for consistency
-              // This ensures the same logic is used whether called from React or terminal
-              if (handleCreateSession) {
-                try {
-                  console.log("📝 Creating session from terminal command...");
-                  // Simulate an IPC event (not used but required for handler signature)
-                  const fakeEvent = {
-                    sender: mainWindow?.webContents,
-                  } as any;
-
-                  const session = await handleCreateSession(fakeEvent, {
-                    url: command.url,
-                    initialMessage: command.initialMessage,
-                  });
-
-                  console.log("✅ Session created from terminal:");
-                  console.log("   ID:", session.id);
-                  console.log("   URL:", session.url || "none");
-                  console.log("   Title:", session.title);
-                  console.log("   Event should be sent to renderer...");
-                } catch (error) {
-                  console.error(
-                    "❌ Failed to create session from terminal:",
-                    error
-                  );
-                }
-              } else {
-                console.error("❌ handleCreateSession not available");
-              }
-            } else if (command.type === "zoom-reset") {
-              const tabsManager = (globalThis as any).tabsManager;
-              if (tabsManager && tabsManager.resetZoomActiveTab) {
-                tabsManager.resetZoomActiveTab();
-                console.log("✅ Zoom reset executed");
-              }
-            } else {
-              console.warn("⚠️ Unknown command type:", command.type);
-            }
-
-            // Delete the command file after processing
-            fs.unlinkSync(commandFile);
-          } catch (parseError) {
-            console.error("❌ Failed to parse command file:", parseError);
-            // Try to delete invalid file
-            try {
-              fs.unlinkSync(commandFile);
-            } catch {}
-          }
-        }
-      }
-    } catch (error) {
-      // Ignore file errors
-    }
-  }, 500); // Check every 500ms for faster response
+  // Set up CLI server for command-line interface
+  setupCLIServer(handleCreateSession);
 
   // Handle app events
   app.on("activate", () => {
@@ -331,13 +241,13 @@ function handleZoom(delta: number) {
   }
 
   // Zoom the BrowserView (web content)
-  const tabsManager = (globalThis as any).tabsManager;
+  const tabsManager = getTabManager();
   if (tabsManager) {
     console.log(`🎯 Calling zoomActiveTab with delta: ${delta}`);
     const success = tabsManager.zoomActiveTab(delta);
     console.log(`✅ BrowserView zoom operation result: ${success}`);
   } else {
-    console.log("❌ tabsManager not available in global scope");
+    console.log("❌ tabsManager not available");
   }
 }
 
@@ -353,13 +263,125 @@ function handleZoomReset() {
   }
 
   // Reset BrowserView (web content) zoom
-  const tabsManager = (globalThis as any).tabsManager;
+  const tabsManager = getTabManager();
   if (tabsManager) {
     const success = tabsManager.resetZoomActiveTab();
     console.log(`✅ BrowserView zoom reset success: ${success}`);
   } else {
     console.log("❌ tabsManager not available");
   }
+}
+
+function setupCLIServer(handleCreateSession: any) {
+  const CLI_PORT = 9876;
+  const server = net.createServer((socket) => {
+    console.log('📡 CLI client connected');
+
+    let buffer = '';
+
+    socket.on('data', async (data: Buffer) => {
+      buffer += data.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+
+        try {
+          const command = JSON.parse(line);
+          console.log('📨 CLI command received:', command.type);
+
+          let response: any = { success: false };
+
+          try {
+            if (command.type === 'create-session') {
+              if (!handleCreateSession) {
+                response = { success: false, error: 'handleCreateSession not available' };
+              } else {
+                const fakeEvent = { sender: mainWindow?.webContents } as any;
+                const session = await handleCreateSession(fakeEvent, {
+                  url: command.url,
+                  initialMessage: command.initialMessage,
+                });
+                response = {
+                  success: true,
+                  data: `Session created: ${session.id}\nTitle: ${session.title}\nURL: ${session.url || 'none'}`,
+                };
+              }
+            } else if (command.type === 'list-sessions') {
+              const agentManager = getAgentManager();
+              if (!agentManager) {
+                response = { success: false, error: 'AgentManager not available' };
+              } else {
+                const sessions = agentManager.getAllSessions();
+                response = {
+                  success: true,
+                  data: sessions.map((s) => ({
+                    id: s.id,
+                    title: s.title,
+                    url: s.url,
+                    state: s.state,
+                    messages: s.messages.length,
+                  })),
+                };
+              }
+            } else if (command.type === 'ask-question') {
+              const agentManager = getAgentManager();
+              if (!agentManager) {
+                response = { success: false, error: 'AgentManager not available' };
+              } else {
+                const session = agentManager.getSession(command.sessionId);
+                if (!session) {
+                  response = { success: false, error: `Session not found: ${command.sessionId}` };
+                } else {
+                  const qaResponse = await agentManager.askQuestion(
+                    command.sessionId,
+                    command.question
+                  );
+                  if (qaResponse.success) {
+                    response = {
+                      success: true,
+                      data: `Answer: ${qaResponse.answer}\nUsed ${qaResponse.relevantChunks?.length || 0} relevant chunk(s)`,
+                    };
+                  } else {
+                    response = { success: false, error: qaResponse.error || 'Failed to get answer' };
+                  }
+                }
+              }
+            } else {
+              response = { success: false, error: `Unknown command type: ${command.type}` };
+            }
+          } catch (error: any) {
+            response = { success: false, error: error.message || 'Unknown error' };
+          }
+
+          socket.write(JSON.stringify(response) + '\n');
+        } catch (parseError) {
+          socket.write(JSON.stringify({ success: false, error: 'Invalid JSON' }) + '\n');
+        }
+      }
+    });
+
+    socket.on('end', () => {
+      console.log('📡 CLI client disconnected');
+    });
+
+    socket.on('error', (err) => {
+      console.error('CLI socket error:', err);
+    });
+  });
+
+  server.listen(CLI_PORT, '127.0.0.1', () => {
+    console.log(`✅ CLI server listening on port ${CLI_PORT}`);
+  });
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`⚠️ CLI port ${CLI_PORT} already in use`);
+    } else {
+      console.error('CLI server error:', err);
+    }
+  });
 }
 
 function setupGlobalShortcuts() {
@@ -398,11 +420,10 @@ function setupGlobalShortcuts() {
 
   globalShortcut.register("CommandOrControl+Plus", () => {
     console.log("Global Zoom In (Plus) shortcut triggered");
-    const activeTabId = (globalThis as any).tabsManager?.getActiveTabId();
-    if (activeTabId) {
-      const activeView = (globalThis as any).tabsManager?.views?.get(
-        activeTabId
-      );
+    const tabsManager = getTabManager();
+    const activeTabId = tabsManager?.getActiveTabId();
+    if (activeTabId && tabsManager) {
+      const activeView = (tabsManager as any).views?.get(activeTabId);
       if (activeView) {
         const currentZoom = activeView.webContents.getZoomFactor();
         activeView.webContents.setZoomFactor(Math.min(currentZoom + 0.1, 5.0));

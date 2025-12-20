@@ -102,6 +102,8 @@ const electronAPI = {
       ipcRenderer.invoke('agent:get-session', sessionId),
     getAll: () =>
       ipcRenderer.invoke('agent:get-all-sessions'),
+    getSessionIds: () =>
+      ipcRenderer.invoke('agent:get-session-ids'),
     sendMessage: (sessionId: string, content: string) =>
       ipcRenderer.invoke('agent:send-message', sessionId, content),
     delete: (sessionId: string) =>
@@ -112,6 +114,8 @@ const electronAPI = {
       ipcRenderer.invoke('agent:session-show-view', sessionId),
     updateViewBounds: (sessionId: string, bounds: { x: number; y: number; width: number; height: number }) =>
       ipcRenderer.invoke('agent:session-update-bounds', sessionId, bounds),
+    getTabId: (sessionId: string) =>
+      ipcRenderer.invoke('agent:get-tab-id', sessionId),
   },
 
   // Logging services

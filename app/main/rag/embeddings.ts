@@ -137,43 +137,61 @@ export async function generateChunkEmbeddings(
   const startTime = Date.now();
   const embeddings = new Map<string, number[]>();
 
-  eventLogger.info('Embeddings', `Starting embedding generation for ${chunks.length} chunks...`);
+  eventLogger.info('Embeddings', `Starting parallel embedding generation for ${chunks.length} chunks...`);
   eventLogger.info('Embeddings', 'This process converts text chunks into vector embeddings for semantic search');
+  eventLogger.info('Embeddings', 'Processing chunks in parallel batches for faster generation');
 
-  // Process chunks with error handling and retry logic
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    let retries = 2;
-    let success = false;
-    
-    while (retries > 0 && !success) {
-      try {
-        const embedding = await generateEmbedding(chunk.content);
-        embeddings.set(chunk.id, embedding);
-        success = true;
-        
-        // Log progress every chunk for real-time updates
-        eventLogger.progress('Embeddings', `Generating embedding ${i + 1}/${chunks.length}...`, i + 1, chunks.length);
-      } catch (error: any) {
-        retries--;
-        const isEPIPE = error.code === 'EPIPE' || error.message?.includes('EPIPE');
-        
-        if (isEPIPE && retries > 0) {
-          eventLogger.warning('Embeddings', `EPIPE error for chunk ${i + 1}/${chunks.length}, retrying... (${retries} retries left)`);
-          // Wait a bit before retry
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        } else {
-          eventLogger.error('Embeddings', `Failed to generate embedding for chunk ${i + 1}/${chunks.length} (ID: ${chunk.id})`, error.message || error);
-          // Skip this chunk and continue
-          break;
+  // Process ALL chunks in parallel for maximum speed
+  // No batching - process everything concurrently
+  // This is safe because embedding generation is CPU-bound and the model can handle concurrent requests
+  let completedCount = 0;
+
+  eventLogger.info('Embeddings', `Processing ${chunks.length} chunks in full parallel mode (no batching)`);
+
+  // Process ALL chunks in parallel (no batching)
+  const allPromises = chunks.map(async (chunk, index) => {
+      let retries = 2;
+      let success = false;
+      
+      while (retries > 0 && !success) {
+        try {
+          const embedding = await generateEmbedding(chunk.content);
+          embeddings.set(chunk.id, embedding);
+          success = true;
+          completedCount++;
+          
+          // Log progress every 10% or every 100 chunks (whichever is more frequent)
+          const logInterval = Math.max(1, Math.floor(chunks.length / 20)); // Log ~20 times
+          if (completedCount % logInterval === 0 || completedCount === chunks.length) {
+            eventLogger.progress('Embeddings', `Generating embedding ${completedCount}/${chunks.length}...`, completedCount, chunks.length);
+          }
+          return { success: true, chunkId: chunk.id };
+        } catch (error: any) {
+          retries--;
+          const isEPIPE = error.code === 'EPIPE' || error.message?.includes('EPIPE');
+          
+          if (isEPIPE && retries > 0) {
+            eventLogger.warning('Embeddings', `EPIPE error for chunk ${index + 1}/${chunks.length}, retrying... (${retries} retries left)`);
+            // Wait a bit before retry
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else {
+            eventLogger.error('Embeddings', `Failed to generate embedding for chunk ${index + 1}/${chunks.length} (ID: ${chunk.id})`, error.message || error);
+            return { success: false, chunkId: chunk.id };
+          }
         }
       }
-    }
-  }
+      return { success: false, chunkId: chunk.id };
+    });
+  
+  // Wait for ALL chunks to complete in parallel
+  await Promise.all(allPromises);
 
   const processingTime = Date.now() - startTime;
   const successRate = ((embeddings.size / chunks.length) * 100).toFixed(1);
+  const avgTimePerChunk = (processingTime / chunks.length).toFixed(1);
+  const chunksPerSecond = ((chunks.length / processingTime) * 1000).toFixed(1);
   eventLogger.success('Embeddings', `Generated ${embeddings.size} out of ${chunks.length} embeddings (${successRate}% success) in ${processingTime}ms`);
+  eventLogger.info('Embeddings', `Performance: ${chunksPerSecond} chunks/sec, ${avgTimePerChunk}ms avg per chunk (full parallel processing)`);
   eventLogger.info('Embeddings', 'Embeddings are now ready for semantic similarity search');
   
   if (embeddings.size < chunks.length) {

@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AddressBar } from './AddressBar';
 import { AIChatPanel } from '../ai-ui/AIChatPanel';
+import { EventLog } from './EventLog';
+import { EmbeddingProgress } from './EmbeddingProgress';
+import { AIResponse } from '../../shared/types';
 
 interface AgentMessage {
   id: string;
@@ -9,15 +12,7 @@ interface AgentMessage {
   timestamp: number;
 }
 
-// Convert AgentMessage to ChatMessage format for AIChatPanel
-function convertToChatMessages(agentMessages: AgentMessage[]): Array<{ from: 'user' | 'ai'; content: string }> {
-  return agentMessages
-    .filter(msg => msg.role === 'user' || msg.role === 'assistant')
-    .map(msg => ({
-      from: msg.role === 'user' ? 'user' : 'ai',
-      content: msg.content
-    }));
-}
+// This function is no longer needed - we handle conversion in useEffect
 
 interface AgentSession {
   id: string;
@@ -46,6 +41,12 @@ export const SessionView: React.FC<SessionViewProps> = ({
 }) => {
   const messages = session.messages || [];
   const browserViewportRef = useRef<HTMLDivElement>(null);
+  const [tabId, setTabId] = useState<string | null>(null);
+  const [tabIsLoading, setTabIsLoading] = useState(false);
+  const [tabUrl, setTabUrl] = useState<string>(session.url || '');
+  const [chatMessages, setChatMessages] = useState<Array<{ from: 'user' | 'ai'; content: string; data?: any }>>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isEventLogOpen, setIsEventLogOpen] = useState(false);
   
   console.log('SessionView render:', {
     sessionId: session.id,
@@ -54,6 +55,71 @@ export const SessionView: React.FC<SessionViewProps> = ({
     state: session.state,
     messagesCount: messages.length
   });
+
+  // Get tabId for this session and listen to tab updates
+  useEffect(() => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI?.sessions) return;
+
+    const fetchTabId = async () => {
+      try {
+        // Get tabId from session via IPC
+        const fetchedTabId = await electronAPI.sessions.getTabId(session.id);
+        if (fetchedTabId) {
+          setTabId(fetchedTabId);
+          console.log('[SessionView] Got tabId for session:', fetchedTabId);
+        }
+      } catch (error) {
+        console.error('Failed to get session tabId:', error);
+      }
+    };
+
+    fetchTabId();
+
+    // Listen for tab updates that match this session's tab
+    const handleTabUpdate = (updatedTab: any) => {
+      if (updatedTab.id === tabId) {
+        setTabIsLoading(updatedTab.isLoading || false);
+        setTabUrl(updatedTab.url || session.url || '');
+        console.log('[SessionView] Tab updated:', updatedTab);
+      }
+    };
+
+    // Listen for session updates (which may include URL changes)
+    const handleSessionUpdate = (updatedSession: any) => {
+      if (updatedSession.id === session.id) {
+        setTabUrl(updatedSession.url || '');
+      }
+    };
+
+    if (electronAPI.on) {
+      electronAPI.on('tab:update', handleTabUpdate);
+      electronAPI.on('agent:session-updated', handleSessionUpdate);
+    }
+
+    return () => {
+      if (electronAPI.off) {
+        electronAPI.off('tab:update', handleTabUpdate);
+        electronAPI.off('agent:session-updated', handleSessionUpdate);
+      }
+    };
+  }, [session.id, session.url, tabId]);
+
+  // Convert agent messages to chat messages with data
+  useEffect(() => {
+    const converted = messages
+      .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+      .map(msg => {
+        // Try to extract data from message if it exists
+        const messageData = (msg as any).data;
+        return {
+          from: msg.role === 'user' ? 'user' as const : 'ai' as const,
+          content: msg.content,
+          data: messageData || undefined
+        };
+      });
+    setChatMessages(converted);
+  }, [messages]);
 
   // Sync BrowserView bounds with React div using ResizeObserver
   useEffect(() => {
@@ -179,22 +245,109 @@ export const SessionView: React.FC<SessionViewProps> = ({
           </div>
         </div>
 
-        {/* Right: Agent Chat */}
+        {/* Right: Agent Chat + Event Log */}
         <div className="w-[420px] border-l border-gray-300 flex flex-col bg-white">
-          <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-            <h3 className="font-semibold text-gray-900 text-sm">AI Agent</h3>
-          </div>
-          <div className="flex-1 overflow-hidden">
+          {/* Embedding Progress - show above chat */}
+          {tabId && (
+            <div className="border-b border-gray-200">
+              <EmbeddingProgress 
+                tabId={tabId}
+                tabIsLoading={tabIsLoading}
+                tabUrl={tabUrl}
+              />
+            </div>
+          )}
+          
+          {/* AI Chat Panel */}
+          <div className="flex-1 flex flex-col overflow-hidden">
             <AIChatPanel
-              messages={convertToChatMessages(messages)}
-              onSend={async (text: string) => {
-                onSendMessage(text);
-                return null; // Return null since we handle updates via events
+              messages={chatMessages}
+              onSend={async (text: string): Promise<AIResponse | null> => {
+                setIsProcessing(true);
+                try {
+                  const electronAPI = (window as any).electronAPI;
+                  
+                  // Use the tab-based AI system with session's tabId
+                  // Get tabId for this session from backend
+                  let actualTabId = tabId;
+                  if (!actualTabId) {
+                    // Get tabId from session via IPC
+                    try {
+                      const tabIdResult = await electronAPI.sessions.getTabId?.(session.id);
+                      if (tabIdResult) {
+                        actualTabId = tabIdResult;
+                        setTabId(tabIdResult);
+                      }
+                    } catch (error) {
+                      console.warn('Could not get tabId for session, using session ID:', error);
+                      actualTabId = session.id; // Fallback
+                    }
+                  }
+
+                  // Send AI request using QA service (RAG system)
+                  const response = await electronAPI.qa.ask({
+                    question: text,
+                    tabId: actualTabId,
+                    context: {
+                      url: session.url,
+                      title: session.title
+                    }
+                  });
+
+                  // Add user message
+                  setChatMessages(prev => [...prev, {
+                    from: 'user',
+                    content: text
+                  }]);
+
+                  // Add AI response with data
+                  if (response && response.success) {
+                    setChatMessages(prev => [...prev, {
+                      from: 'ai',
+                      content: response.content || '',
+                      data: {
+                        relevantChunks: response.relevantChunks,
+                        sourceLocation: response.sourceLocation,
+                        prompt: response.prompt
+                      }
+                    }]);
+                  }
+
+                  // Also call the session sendMessage for session state updates
+                  onSendMessage(text);
+                  
+                  return response;
+                } catch (error) {
+                  console.error('Failed to send AI request:', error);
+                  return null;
+                } finally {
+                  setIsProcessing(false);
+                }
               }}
-              isProcessing={session.state === 'thinking' || session.state === 'executing_tool'}
-              hasActiveTab={true}
+              isProcessing={isProcessing || session.state === 'thinking' || session.state === 'executing_tool'}
+              hasActiveTab={!!tabId}
             />
           </div>
+
+          {/* Event Log Toggle Button */}
+          <div className="border-t border-gray-200 px-4 py-2 bg-gray-50">
+            <button
+              onClick={() => setIsEventLogOpen(!isEventLogOpen)}
+              className="w-full px-3 py-2 text-xs font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              {isEventLogOpen ? '▼' : '▲'} Event Log
+            </button>
+          </div>
+
+          {/* Event Log Panel */}
+          {isEventLogOpen && (
+            <div className="h-64 border-t border-gray-300">
+              <EventLog 
+                isOpen={isEventLogOpen}
+                onToggle={() => setIsEventLogOpen(!isEventLogOpen)}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -2,10 +2,10 @@ import { ContentChunk, PageContent, Section, Heading } from '../../shared/types'
 import { v4 as uuidv4 } from 'uuid';
 import { eventLogger } from '../logging/event-logger';
 
-const MIN_CHUNK_SIZE = 50; // Minimum words per chunk
-const MAX_CHUNK_SIZE = 100; // Maximum words per chunk (~400 chars)
-const MAX_CHUNK_CHARS = 400; // Hard limit on characters per chunk
-const OVERLAP_WORDS = 25; // Words to overlap between chunks
+const MIN_CHUNK_SIZE = 100; // Minimum words per chunk
+const MAX_CHUNK_SIZE = 200; // Maximum words per chunk (~800 chars)
+const MAX_CHUNK_CHARS = 800; // Increased from 400 to 800 for larger chunks (reduces total chunk count)
+const OVERLAP_WORDS = 50; // Words to overlap between chunks
 
 export function chunkContent(pageContent: PageContent): ContentChunk[] {
   eventLogger.info('Chunking', `Starting content chunking for page: ${pageContent.title}`);
