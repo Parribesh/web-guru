@@ -1,13 +1,12 @@
-import { BrowserWindow, BrowserView } from "electron";
-import { v4 as uuidv4 } from "uuid"; // TODO: Add uuid dependency
-import { Tab } from "../shared/types";
-import {
-  createBrowserView,
-  updateBrowserViewBounds,
-  setBrowserViewBounds,
-} from "./windows";
-import { eventLogger } from "./logging/event-logger";
-import * as path from "path";
+// Tab Manager - Manages browser tabs and their associated BrowserViews
+
+import { BrowserWindow, BrowserView } from 'electron';
+import { v4 as uuidv4 } from 'uuid';
+import { Tab } from '../../shared/types';
+import { ViewService } from '../windows/ViewService';
+import { setBrowserViewBounds } from '../windows/bounds';
+import { eventLogger } from '../logging/event-logger';
+import * as path from 'path';
 
 const BROWSER_UI_HEIGHT = 40; // space for top title bar only
 const VIEWPORT_RATIO = 0.5; // left half for page, right half for agent/chat
@@ -21,7 +20,7 @@ export class TabManager {
 
   constructor(mainWindow: BrowserWindow) {
     this.mainWindow = mainWindow;
-    this.preloadPath = path.join(__dirname, "../../preload/preload/index.js");
+    this.preloadPath = path.resolve(__dirname, '../../../preload/preload/index.js');
 
     // Note: BrowserView bounds are now controlled by React via ResizeObserver
     // React sends bounds updates via IPC, so we don't need window resize handlers here
@@ -33,6 +32,10 @@ export class TabManager {
   }
 
   // Cleanup method
+  getBrowserView(tabId: string): BrowserView | null {
+    return this.views.get(tabId) || null;
+  }
+
   destroy(): void {
     // Clean up all views
     this.views.forEach((view) => {
@@ -49,13 +52,13 @@ export class TabManager {
     // We need to go up to the project root and then into app/
     let devSamplePath: string;
 
-    if (__dirname.includes("dist")) {
+    if (__dirname.includes('dist')) {
       // Compiled: dist/main/main/ -> go up to project root, then app/
-      const projectRoot = path.resolve(__dirname, "../../../");
-      devSamplePath = path.join(projectRoot, "app", "dev-sample.html");
+      const projectRoot = path.resolve(__dirname, '../../../../');
+      devSamplePath = path.join(projectRoot, 'app', 'dev-sample.html');
     } else {
       // Source: app/main/ -> go up to app/
-      devSamplePath = path.join(__dirname, "../dev-sample.html");
+      devSamplePath = path.join(__dirname, '../../dev-sample.html');
     }
 
     const normalizedPath = path.resolve(devSamplePath);
@@ -63,13 +66,13 @@ export class TabManager {
     console.log(`[TabManager] __dirname: ${__dirname}`);
 
     // Verify file exists
-    const fs = require("fs");
+    const fs = require('fs');
     if (!fs.existsSync(normalizedPath)) {
       console.error(
         `[TabManager] Dev sample file not found at: ${normalizedPath}`
       );
       // Fallback: try to find it relative to process.cwd()
-      const fallbackPath = path.join(process.cwd(), "app", "dev-sample.html");
+      const fallbackPath = path.join(process.cwd(), 'app', 'dev-sample.html');
       if (fs.existsSync(fallbackPath)) {
         console.log(`[TabManager] Using fallback path: ${fallbackPath}`);
         return `file://${path.resolve(fallbackPath)}`;
@@ -83,8 +86,8 @@ export class TabManager {
     const tabId = uuidv4();
     const tab: Tab = {
       id: tabId,
-      url: url || "",
-      title: "New Tab",
+      url: url || '',
+      title: 'New Tab',
       isLoading: false,
       canGoBack: false,
       canGoForward: false,
@@ -93,7 +96,7 @@ export class TabManager {
     this.tabs.set(tabId, tab);
 
     // Create BrowserView for this tab
-    const view = await createBrowserView(
+    const view = await ViewService.createBrowserView(
       tab,
       this.preloadPath,
       this.mainWindow
@@ -187,7 +190,7 @@ export class TabManager {
     const view = this.views.get(tabId);
     if (!view) {
       eventLogger.error(
-        "Navigation",
+        'Navigation',
         `Cannot navigate: View not found for tab ${tabId}`
       );
       return false;
@@ -196,15 +199,15 @@ export class TabManager {
     // Ensure URL has protocol (but preserve file:// URLs)
     let fullUrl = url;
     if (
-      !url.startsWith("http://") &&
-      !url.startsWith("https://") &&
-      !url.startsWith("file://")
+      !url.startsWith('http://') &&
+      !url.startsWith('https://') &&
+      !url.startsWith('file://')
     ) {
       fullUrl = `https://${url}`;
     }
 
-    eventLogger.info("Navigation", `Fetching article: ${fullUrl}`);
-    eventLogger.info("Navigation", `Tab ID: ${tabId}`);
+    eventLogger.info('Navigation', `Fetching article: ${fullUrl}`);
+    eventLogger.info('Navigation', `Tab ID: ${tabId}`);
 
     view.webContents.loadURL(fullUrl);
     return true;
@@ -347,11 +350,11 @@ export class TabManager {
 
         return true;
       } else {
-        console.log("Cannot zoom - no content loaded or about:blank");
+        console.log('Cannot zoom - no content loaded or about:blank');
         return false;
       }
     } catch (error) {
-      console.error("BrowserView zoom failed:", error);
+      console.error('BrowserView zoom failed:', error);
       return false;
     }
   }
@@ -359,13 +362,13 @@ export class TabManager {
   resetZoomActiveTab(): boolean {
     const activeTabId = this.getActiveTabId();
     if (!activeTabId) {
-      console.log("❌ No active tab to reset zoom");
+      console.log('❌ No active tab to reset zoom');
       return false;
     }
 
     const activeView = this.views.get(activeTabId);
     if (!activeView) {
-      console.log("❌ No active BrowserView found for tab:", activeTabId);
+      console.log('❌ No active BrowserView found for tab:', activeTabId);
       return false;
     }
 
@@ -408,7 +411,7 @@ export class TabManager {
   }
 
   // Handle window resize
-  onWindowResize(width: number, height: number) {
+  onWindowResize(width: number, height: number): void {
     if (this.activeTabId) {
       const view = this.views.get(this.activeTabId);
       if (view) {
@@ -417,3 +420,4 @@ export class TabManager {
     }
   }
 }
+

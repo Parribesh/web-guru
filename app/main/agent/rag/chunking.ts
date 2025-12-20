@@ -1,6 +1,6 @@
-import { ContentChunk, PageContent, Section, Heading } from '../../shared/types';
+import { ContentChunk, PageContent, Section, Heading } from '../../../shared/types';
 import { v4 as uuidv4 } from 'uuid';
-import { eventLogger } from '../logging/event-logger';
+import { eventLogger } from '../../logging/event-logger';
 
 const MIN_CHUNK_SIZE = 100; // Minimum words per chunk
 const MAX_CHUNK_SIZE = 200; // Maximum words per chunk (~800 chars)

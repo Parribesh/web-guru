@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Travel Booking Portal - Test Website</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .tab {
+            padding: 15px 30px;
+            background: none;
+            border: none;
+            font-size: 1.1em;
+            cursor: pointer;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+            font-weight: bold;
+        }
+
+        .tab:hover {
+            color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+            font-size: 0.95em;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.2em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: 10px;
+        }
+
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+
+        .submit-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .result-container {
+            display: none;
+            margin-top: 30px;
+            padding: 25px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #28a745;
+        }
+
+        .result-container.show {
+            display: block;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .result-title {
+            font-size: 1.5em;
+            color: #28a745;
+            margin-bottom: 15px;
+            font-weight: bold;
+        }
+
+        .result-item {
+            margin-bottom: 12px;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+        }
+
+        .result-item strong {
+            color: #667eea;
+            display: inline-block;
+            min-width: 150px;
+        }
+
+        .error-message {
+            display: none;
+            margin-top: 15px;
+            padding: 15px;
+            background: #f8d7da;
+            color: #721c24;
+            border-radius: 8px;
+            border-left: 4px solid #dc3545;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✈️ Travel Booking Portal</h1>
+            <p>Book your flights and hotels with ease</p>
+        </div>
+
+        <div class="content">
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('flight')">Flight Booking</button>
+                <button class="tab" onclick="switchTab('hotel')">Hotel Booking</button>
+            </div>
+
+            <!-- Flight Booking Form -->
+            <div id="flight-form" class="tab-content active">
+                <form id="flightBookingForm" onsubmit="handleFlightSubmit(event)">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="flight-from">From (City/Airport)</label>
+                            <input type="text" id="flight-from" name="from" required 
+                                   placeholder="e.g., New York, JFK">
+                        </div>
+                        <div class="form-group">
+                            <label for="flight-to">To (City/Airport)</label>
+                            <input type="text" id="flight-to" name="to" required 
+                                   placeholder="e.g., Los Angeles, LAX">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="flight-departure">Departure Date</label>
+                            <input type="date" id="flight-departure" name="departure" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="flight-return">Return Date (Optional)</label>
+                            <input type="date" id="flight-return" name="return">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="flight-passengers">Number of Passengers</label>
+                            <select id="flight-passengers" name="passengers" required>
+                                <option value="1">1 Passenger</option>
+                                <option value="2">2 Passengers</option>
+                                <option value="3">3 Passengers</option>
+                                <option value="4">4 Passengers</option>
+                                <option value="5">5+ Passengers</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="flight-class">Class</label>
+                            <select id="flight-class" name="class" required>
+                                <option value="economy">Economy</option>
+                                <option value="business">Business</option>
+                                <option value="first">First Class</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="flight-name">Passenger Name</label>
+                        <input type="text" id="flight-name" name="name" required 
+                               placeholder="Full name as on ID">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="flight-email">Email Address</label>
+                        <input type="email" id="flight-email" name="email" required 
+                               placeholder="your.email@example.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="flight-phone">Phone Number</label>
+                        <input type="tel" id="flight-phone" name="phone" required 
+                               placeholder="+1 (555) 123-4567">
+                    </div>
+
+                    <button type="submit" class="submit-btn" id="flight-submit-btn">
+                        Search & Book Flight
+                    </button>
+
+                    <div class="error-message" id="flight-error"></div>
+                    <div class="loading" id="flight-loading">
+                        <div class="spinner"></div>
+                        <p>Searching for flights...</p>
+                    </div>
+                </form>
+
+                <div class="result-container" id="flight-result"></div>
+            </div>
+
+            <!-- Hotel Booking Form -->
+            <div id="hotel-form" class="tab-content">
+                <form id="hotelBookingForm" onsubmit="handleHotelSubmit(event)">
+                    <div class="form-group">
+                        <label for="hotel-destination">Destination</label>
+                        <input type="text" id="hotel-destination" name="destination" required 
+                               placeholder="e.g., Paris, France">
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="hotel-checkin">Check-in Date</label>
+                            <input type="date" id="hotel-checkin" name="checkin" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="hotel-checkout">Check-out Date</label>
+                            <input type="date" id="hotel-checkout" name="checkout" required>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="hotel-guests">Number of Guests</label>
+                            <select id="hotel-guests" name="guests" required>
+                                <option value="1">1 Guest</option>
+                                <option value="2">2 Guests</option>
+                                <option value="3">3 Guests</option>
+                                <option value="4">4 Guests</option>
+                                <option value="5">5+ Guests</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="hotel-rooms">Number of Rooms</label>
+                            <select id="hotel-rooms" name="rooms" required>
+                                <option value="1">1 Room</option>
+                                <option value="2">2 Rooms</option>
+                                <option value="3">3 Rooms</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="hotel-name">Guest Name</label>
+                        <input type="text" id="hotel-name" name="name" required 
+                               placeholder="Full name">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="hotel-email">Email Address</label>
+                        <input type="email" id="hotel-email" name="email" required 
+                               placeholder="your.email@example.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="hotel-phone">Phone Number</label>
+                        <input type="tel" id="hotel-phone" name="phone" required 
+                               placeholder="+1 (555) 123-4567">
+                    </div>
+
+                    <button type="submit" class="submit-btn" id="hotel-submit-btn">
+                        Search & Book Hotel
+                    </button>
+
+                    <div class="error-message" id="hotel-error"></div>
+                    <div class="loading" id="hotel-loading">
+                        <div class="spinner"></div>
+                        <p>Searching for hotels...</p>
+                    </div>
+                </form>
+
+                <div class="result-container" id="hotel-result"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Set minimum date to today
+        const today = new Date().toISOString().split('T')[0];
+        document.getElementById('flight-departure').setAttribute('min', today);
+        document.getElementById('flight-return').setAttribute('min', today);
+        document.getElementById('hotel-checkin').setAttribute('min', today);
+        document.getElementById('hotel-checkout').setAttribute('min', today);
+
+        // Update return date minimum when departure date changes
+        document.getElementById('flight-departure').addEventListener('change', function() {
+            document.getElementById('flight-return').setAttribute('min', this.value);
+        });
+
+        // Update checkout date minimum when checkin date changes
+        document.getElementById('hotel-checkin').addEventListener('change', function() {
+            document.getElementById('hotel-checkout').setAttribute('min', this.value);
+        });
+
+        function switchTab(tab) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(btn => {
+                btn.classList.remove('active');
+            });
+
+            // Show selected tab
+            if (tab === 'flight') {
+                document.getElementById('flight-form').classList.add('active');
+                document.querySelectorAll('.tab')[0].classList.add('active');
+            } else {
+                document.getElementById('hotel-form').classList.add('active');
+                document.querySelectorAll('.tab')[1].classList.add('active');
+            }
+
+            // Clear any previous results
+            document.getElementById('flight-result').classList.remove('show');
+            document.getElementById('hotel-result').classList.remove('show');
+        }
+
+        // Mock API function for flight booking
+        async function mockFlightAPI(formData) {
+            // Simulate API delay
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Generate mock flight data
+            const flights = [
+                {
+                    airline: 'SkyWings Airlines',
+                    flightNumber: 'SW' + Math.floor(Math.random() * 9000 + 1000),
+                    departure: formData.departure + ' 08:30',
+                    arrival: formData.departure + ' 14:45',
+                    duration: '6h 15m',
+                    price: Math.floor(Math.random() * 500 + 300),
+                    seats: 'Available'
+                },
+                {
+                    airline: 'Global Airways',
+                    flightNumber: 'GA' + Math.floor(Math.random() * 9000 + 1000),
+                    departure: formData.departure + ' 12:15',
+                    arrival: formData.departure + ' 18:30',
+                    duration: '6h 15m',
+                    price: Math.floor(Math.random() * 500 + 350),
+                    seats: 'Available'
+                },
+                {
+                    airline: 'Express Air',
+                    flightNumber: 'EA' + Math.floor(Math.random() * 9000 + 1000),
+                    departure: formData.departure + ' 16:00',
+                    arrival: formData.departure + ' 22:20',
+                    duration: '6h 20m',
+                    price: Math.floor(Math.random() * 500 + 280),
+                    seats: 'Available'
+                }
+            ];
+
+            // Select best option (lowest price)
+            const bestFlight = flights.reduce((min, flight) => 
+                flight.price < min.price ? flight : min
+            );
+
+            return {
+                success: true,
+                bookingId: 'BK' + Date.now(),
+                passenger: formData.name,
+                email: formData.email,
+                route: `${formData.from} → ${formData.to}`,
+                flights: flights,
+                bestOption: bestFlight,
+                totalPrice: bestFlight.price * parseInt(formData.passengers),
+                bookingDate: new Date().toLocaleString()
+            };
+        }
+
+        // Mock API function for hotel booking
+        async function mockHotelAPI(formData) {
+            // Simulate API delay
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Calculate nights
+            const checkin = new Date(formData.checkin);
+            const checkout = new Date(formData.checkout);
+            const nights = Math.ceil((checkout - checkin) / (1000 * 60 * 60 * 24));
+
+            // Generate mock hotel data
+            const hotels = [
+                {
+                    name: 'Grand Plaza Hotel',
+                    rating: 4.5,
+                    address: '123 Main Street, ' + formData.destination,
+                    price: Math.floor(Math.random() * 100 + 120),
+                    amenities: ['Free WiFi', 'Pool', 'Gym', 'Breakfast'],
+                    rooms: 'Available'
+                },
+                {
+                    name: 'Luxury Suites',
+                    rating: 4.8,
+                    address: '456 Ocean Avenue, ' + formData.destination,
+                    price: Math.floor(Math.random() * 150 + 180),
+                    amenities: ['Free WiFi', 'Pool', 'Spa', 'Breakfast', 'Parking'],
+                    rooms: 'Available'
+                },
+                {
+                    name: 'Budget Inn',
+                    rating: 3.8,
+                    address: '789 Market Street, ' + formData.destination,
+                    price: Math.floor(Math.random() * 50 + 60),
+                    amenities: ['Free WiFi', 'Breakfast'],
+                    rooms: 'Available'
+                }
+            ];
+
+            // Select best option (highest rating)
+            const bestHotel = hotels.reduce((max, hotel) => 
+                hotel.rating > max.rating ? hotel : max
+            );
+
+            return {
+                success: true,
+                bookingId: 'HT' + Date.now(),
+                guest: formData.name,
+                email: formData.email,
+                destination: formData.destination,
+                hotels: hotels,
+                bestOption: bestHotel,
+                nights: nights,
+                totalPrice: bestHotel.price * nights * parseInt(formData.rooms),
+                bookingDate: new Date().toLocaleString()
+            };
+        }
+
+        async function handleFlightSubmit(event) {
+            event.preventDefault();
+            
+            const form = event.target;
+            const submitBtn = document.getElementById('flight-submit-btn');
+            const loading = document.getElementById('flight-loading');
+            const errorDiv = document.getElementById('flight-error');
+            const resultDiv = document.getElementById('flight-result');
+
+            // Hide previous results/errors
+            errorDiv.classList.remove('show');
+            resultDiv.classList.remove('show');
+
+            // Get form data
+            const formData = {
+                from: document.getElementById('flight-from').value,
+                to: document.getElementById('flight-to').value,
+                departure: document.getElementById('flight-departure').value,
+                return: document.getElementById('flight-return').value,
+                passengers: document.getElementById('flight-passengers').value,
+                class: document.getElementById('flight-class').value,
+                name: document.getElementById('flight-name').value,
+                email: document.getElementById('flight-email').value,
+                phone: document.getElementById('flight-phone').value
+            };
+
+            // Validate return date if provided
+            if (formData.return && formData.return < formData.departure) {
+                errorDiv.textContent = 'Return date must be after departure date';
+                errorDiv.classList.add('show');
+                return;
+            }
+
+            // Show loading
+            submitBtn.disabled = true;
+            loading.classList.add('show');
+
+            try {
+                const result = await mockFlightAPI(formData);
+                
+                // Hide loading
+                loading.classList.remove('show');
+                submitBtn.disabled = false;
+
+                // Display results
+                let html = `
+                    <div class="result-title">✅ Flight Booking Confirmed!</div>
+                    <div class="result-item">
+                        <strong>Booking ID:</strong> ${result.bookingId}
+                    </div>
+                    <div class="result-item">
+                        <strong>Passenger:</strong> ${result.passenger}
+                    </div>
+                    <div class="result-item">
+                        <strong>Route:</strong> ${result.route}
+                    </div>
+                    <div class="result-item">
+                        <strong>Departure:</strong> ${result.bestOption.departure}
+                    </div>
+                    <div class="result-item">
+                        <strong>Arrival:</strong> ${result.bestOption.arrival}
+                    </div>
+                    <div class="result-item">
+                        <strong>Airline:</strong> ${result.bestOption.airline}
+                    </div>
+                    <div class="result-item">
+                        <strong>Flight Number:</strong> ${result.bestOption.flightNumber}
+                    </div>
+                    <div class="result-item">
+                        <strong>Duration:</strong> ${result.bestOption.duration}
+                    </div>
+                    <div class="result-item">
+                        <strong>Class:</strong> ${formData.class.charAt(0).toUpperCase() + formData.class.slice(1)}
+                    </div>
+                    <div class="result-item">
+                        <strong>Passengers:</strong> ${formData.passengers}
+                    </div>
+                    <div class="result-item">
+                        <strong>Total Price:</strong> $${result.totalPrice}
+                    </div>
+                    <div class="result-item">
+                        <strong>Booking Date:</strong> ${result.bookingDate}
+                    </div>
+                `;
+
+                resultDiv.innerHTML = html;
+                resultDiv.classList.add('show');
+
+                // Scroll to result
+                resultDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } catch (error) {
+                loading.classList.remove('show');
+                submitBtn.disabled = false;
+                errorDiv.textContent = 'An error occurred. Please try again.';
+                errorDiv.classList.add('show');
+            }
+        }
+
+        async function handleHotelSubmit(event) {
+            event.preventDefault();
+            
+            const form = event.target;
+            const submitBtn = document.getElementById('hotel-submit-btn');
+            const loading = document.getElementById('hotel-loading');
+            const errorDiv = document.getElementById('hotel-error');
+            const resultDiv = document.getElementById('hotel-result');
+
+            // Hide previous results/errors
+            errorDiv.classList.remove('show');
+            resultDiv.classList.remove('show');
+
+            // Get form data
+            const formData = {
+                destination: document.getElementById('hotel-destination').value,
+                checkin: document.getElementById('hotel-checkin').value,
+                checkout: document.getElementById('hotel-checkout').value,
+                guests: document.getElementById('hotel-guests').value,
+                rooms: document.getElementById('hotel-rooms').value,
+                name: document.getElementById('hotel-name').value,
+                email: document.getElementById('hotel-email').value,
+                phone: document.getElementById('hotel-phone').value
+            };
+
+            // Validate dates
+            if (formData.checkout <= formData.checkin) {
+                errorDiv.textContent = 'Check-out date must be after check-in date';
+                errorDiv.classList.add('show');
+                return;
+            }
+
+            // Show loading
+            submitBtn.disabled = true;
+            loading.classList.add('show');
+
+            try {
+                const result = await mockHotelAPI(formData);
+                
+                // Hide loading
+                loading.classList.remove('show');
+                submitBtn.disabled = false;
+
+                // Display results
+                let html = `
+                    <div class="result-title">✅ Hotel Booking Confirmed!</div>
+                    <div class="result-item">
+                        <strong>Booking ID:</strong> ${result.bookingId}
+                    </div>
+                    <div class="result-item">
+                        <strong>Guest:</strong> ${result.guest}
+                    </div>
+                    <div class="result-item">
+                        <strong>Hotel:</strong> ${result.bestOption.name}
+                    </div>
+                    <div class="result-item">
+                        <strong>Rating:</strong> ${result.bestOption.rating} ⭐
+                    </div>
+                    <div class="result-item">
+                        <strong>Address:</strong> ${result.bestOption.address}
+                    </div>
+                    <div class="result-item">
+                        <strong>Check-in:</strong> ${formData.checkin}
+                    </div>
+                    <div class="result-item">
+                        <strong>Check-out:</strong> ${formData.checkout}
+                    </div>
+                    <div class="result-item">
+                        <strong>Nights:</strong> ${result.nights}
+                    </div>
+                    <div class="result-item">
+                        <strong>Rooms:</strong> ${formData.rooms}
+                    </div>
+                    <div class="result-item">
+                        <strong>Guests:</strong> ${formData.guests}
+                    </div>
+                    <div class="result-item">
+                        <strong>Amenities:</strong> ${result.bestOption.amenities.join(', ')}
+                    </div>
+                    <div class="result-item">
+                        <strong>Price per Night:</strong> $${result.bestOption.price}
+                    </div>
+                    <div class="result-item">
+                        <strong>Total Price:</strong> $${result.totalPrice}
+                    </div>
+                    <div class="result-item">
+                        <strong>Booking Date:</strong> ${result.bookingDate}
+                    </div>
+                `;
+
+                resultDiv.innerHTML = html;
+                resultDiv.classList.add('show');
+
+                // Scroll to result
+                resultDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } catch (error) {
+                loading.classList.remove('show');
+                submitBtn.disabled = false;
+                errorDiv.textContent = 'An error occurred. Please try again.';
+                errorDiv.classList.add('show');
+            }
+        }
+    </script>
+</body>
+</html>
+
+

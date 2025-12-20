@@ -37,104 +37,161 @@ interface AIResponse {
   error?: string;
 }
 
-enum IPCChannels {
-  CREATE_TAB = 'tab:create',
-  CLOSE_TAB = 'tab:close',
-  SWITCH_TAB = 'tab:switch',
-  UPDATE_TAB = 'tab:update',
-  NAVIGATE = 'navigate',
-  GO_BACK = 'go-back',
-  GO_FORWARD = 'go-forward',
-  RELOAD = 'reload',
-  STOP_LOADING = 'stop-loading',
-  AI_REQUEST = 'ai:request',
-  AI_RESPONSE = 'ai:response',
-  EXTRACT_DOM = 'dom:extract',
-  DOM_CONTENT = 'dom:content',
-  WINDOW_MINIMIZE = 'window:minimize',
-  WINDOW_MAXIMIZE = 'window:maximize',
-  WINDOW_CLOSE = 'window:close',
-  WINDOW_RESIZE = 'window:resize',
-  OPEN_DEV_TOOLS = 'dev-tools:open',
-  CLOSE_DEV_TOOLS = 'dev-tools:close'
-}
+// Import IPCChannels from shared types (will be available at runtime)
+// For preload, we'll use the channel strings directly since we can't import from shared
+const IPCChannels = {
+  tab: {
+    create: 'tab:create',
+    close: 'tab:close',
+    switch: 'tab:switch',
+    update: 'tab:update',
+    getAll: 'tab:get-all',
+  },
+  navigation: {
+    navigate: 'navigation:navigate',
+    goBack: 'navigation:go-back',
+    goForward: 'navigation:go-forward',
+    reload: 'navigation:reload',
+    stopLoading: 'navigation:stop-loading',
+  },
+  session: {
+    create: 'session:create',
+    get: 'session:get',
+    getAll: 'session:get-all',
+    getIds: 'session:get-ids',
+    delete: 'session:delete',
+    getTabId: 'session:get-tab-id',
+    navigate: 'session:navigate',
+    showView: 'session:show-view',
+    updateBounds: 'session:update-bounds',
+  },
+  agent: {
+    sendMessage: 'agent:send-message',
+  },
+  qa: {
+    ask: 'qa:ask',
+  },
+  dom: {
+    extract: 'dom:extract',
+    content: 'dom:content',
+  },
+  window: {
+    minimize: 'window:minimize',
+    maximize: 'window:maximize',
+    close: 'window:close',
+    resize: 'window:resize',
+  },
+  devTools: {
+    open: 'dev-tools:open',
+    close: 'dev-tools:close',
+  },
+  log: {
+    getEvents: 'log:get-events',
+    clear: 'log:clear',
+  },
+  zoom: {
+    in: 'zoom:in',
+    out: 'zoom:out',
+    reset: 'zoom:reset',
+  },
+  utils: {
+    getTestBookingUrl: 'utils:get-test-booking-url',
+  },
+  events: {
+    tabCreated: 'tab:created',
+    tabClosed: 'tab:closed',
+    tabUpdated: 'tab:update',
+    sessionCreated: 'agent:session-created',
+    sessionUpdated: 'agent:session-updated',
+    sessionDeleted: 'agent:session-deleted',
+    logEvent: 'log:event',
+    logClear: 'log:clear',
+    commandPaletteToggle: 'command-palette:toggle',
+    aiTogglePanel: 'ai:toggle-panel',
+    appEvent: 'app-event',
+  },
+};
 
 // Security: Only expose specific, safe APIs to the renderer
 const electronAPI = {
   // Tab management
   tabs: {
-    create: (url?: string) => ipcRenderer.invoke(IPCChannels.CREATE_TAB, url),
-    close: (tabId: string) => ipcRenderer.invoke(IPCChannels.CLOSE_TAB, tabId),
+    create: (url?: string) => ipcRenderer.invoke(IPCChannels.tab.create, url),
+    close: (tabId: string) => ipcRenderer.invoke(IPCChannels.tab.close, tabId),
     switch: (tabId: string) =>
-      ipcRenderer.invoke(IPCChannels.SWITCH_TAB, tabId),
-    getAll: () => ipcRenderer.invoke("get-tabs"),
+      ipcRenderer.invoke(IPCChannels.tab.switch, tabId),
+    getAll: () => ipcRenderer.invoke(IPCChannels.tab.getAll),
   },
 
   // Navigation
   navigation: {
     go: (tabId: string, url: string) =>
-      ipcRenderer.invoke(IPCChannels.NAVIGATE, tabId, url),
-    back: (tabId: string) => ipcRenderer.invoke(IPCChannels.GO_BACK, tabId),
+      ipcRenderer.invoke(IPCChannels.navigation.navigate, tabId, url),
+    back: (tabId: string) => ipcRenderer.invoke(IPCChannels.navigation.goBack, tabId),
     forward: (tabId: string) =>
-      ipcRenderer.invoke(IPCChannels.GO_FORWARD, tabId),
-    reload: (tabId: string) => ipcRenderer.invoke(IPCChannels.RELOAD, tabId),
+      ipcRenderer.invoke(IPCChannels.navigation.goForward, tabId),
+    reload: (tabId: string) => ipcRenderer.invoke(IPCChannels.navigation.reload, tabId),
     stop: (tabId: string) =>
-      ipcRenderer.invoke(IPCChannels.STOP_LOADING, tabId),
-  },
-
-  // AI services
-  ai: {
-    request: (request: AIRequest): Promise<AIResponse> =>
-      ipcRenderer.invoke(IPCChannels.AI_REQUEST, request),
+      ipcRenderer.invoke(IPCChannels.navigation.stopLoading, tabId),
   },
 
   // QA services
   qa: {
     ask: (request: { question: string; tabId: string; context?: { url: string; title: string } }) =>
-      ipcRenderer.invoke('qa:ask', request),
+      ipcRenderer.invoke(IPCChannels.qa.ask, request),
   },
 
-  // Agent Session Management
+  // Session Management
   sessions: {
     create: (request?: { url?: string; initialMessage?: string }) =>
-      ipcRenderer.invoke('agent:create-session', request),
+      ipcRenderer.invoke(IPCChannels.session.create, request),
     get: (sessionId: string) =>
-      ipcRenderer.invoke('agent:get-session', sessionId),
+      ipcRenderer.invoke(IPCChannels.session.get, sessionId),
     getAll: () =>
-      ipcRenderer.invoke('agent:get-all-sessions'),
+      ipcRenderer.invoke(IPCChannels.session.getAll),
     getSessionIds: () =>
-      ipcRenderer.invoke('agent:get-session-ids'),
-    sendMessage: (sessionId: string, content: string) =>
-      ipcRenderer.invoke('agent:send-message', sessionId, content),
+      ipcRenderer.invoke(IPCChannels.session.getIds),
     delete: (sessionId: string) =>
-      ipcRenderer.invoke('agent:delete-session', sessionId),
+      ipcRenderer.invoke(IPCChannels.session.delete, sessionId),
     navigate: (sessionId: string, url: string) =>
-      ipcRenderer.invoke('agent:session-navigate', sessionId, url),
+      ipcRenderer.invoke(IPCChannels.session.navigate, sessionId, url),
     showView: (sessionId: string | null) =>
-      ipcRenderer.invoke('agent:session-show-view', sessionId),
+      ipcRenderer.invoke(IPCChannels.session.showView, sessionId),
     updateViewBounds: (sessionId: string, bounds: { x: number; y: number; width: number; height: number }) =>
-      ipcRenderer.invoke('agent:session-update-bounds', sessionId, bounds),
+      ipcRenderer.invoke(IPCChannels.session.updateBounds, sessionId, bounds),
     getTabId: (sessionId: string) =>
-      ipcRenderer.invoke('agent:get-tab-id', sessionId),
+      ipcRenderer.invoke(IPCChannels.session.getTabId, sessionId),
+  },
+
+  // Agent Operations
+  agent: {
+    sendMessage: (sessionId: string, content: string) =>
+      ipcRenderer.invoke(IPCChannels.agent.sendMessage, sessionId, content),
+  },
+
+  // Utility functions
+  utils: {
+    getTestBookingUrl: () =>
+      ipcRenderer.invoke(IPCChannels.utils.getTestBookingUrl),
   },
 
   // Logging services
   log: {
-    getEvents: () => ipcRenderer.invoke('log:get-events'),
-    clear: () => ipcRenderer.invoke('log:clear'),
+    getEvents: () => ipcRenderer.invoke(IPCChannels.log.getEvents),
+    clear: () => ipcRenderer.invoke(IPCChannels.log.clear),
   },
 
   // Window management
   window: {
-    minimize: () => ipcRenderer.invoke(IPCChannels.WINDOW_MINIMIZE),
-    maximize: () => ipcRenderer.invoke(IPCChannels.WINDOW_MAXIMIZE),
-    close: () => ipcRenderer.invoke(IPCChannels.WINDOW_CLOSE),
+    minimize: () => ipcRenderer.invoke(IPCChannels.window.minimize),
+    maximize: () => ipcRenderer.invoke(IPCChannels.window.maximize),
+    close: () => ipcRenderer.invoke(IPCChannels.window.close),
   },
 
   // Dev tools
   devTools: {
     open: (tabId?: string) =>
-      ipcRenderer.invoke(IPCChannels.OPEN_DEV_TOOLS, tabId),
+      ipcRenderer.invoke(IPCChannels.devTools.open, tabId),
   },
 
   // DOM content extraction
@@ -163,18 +220,17 @@ const electronAPI = {
   on: (channel: string, callback: (...args: any[]) => void) => {
     // Security: Only allow specific channels
     const allowedChannels = [
-      "tab:update",
-      "tab:created",
-      "tab:closed",
-      "ai:response",
-      "dom:extract",
-      "command-palette:toggle",
-      "ai:toggle-panel",
-      "log:event",
-      "log:clear",
-      "agent:session-created",
-      "agent:session-updated",
-      "agent:session-deleted",
+      IPCChannels.tab.update,
+      IPCChannels.events.tabCreated,
+      IPCChannels.events.tabClosed,
+      IPCChannels.dom.extract,
+      IPCChannels.events.commandPaletteToggle,
+      IPCChannels.events.aiTogglePanel,
+      IPCChannels.events.logEvent,
+      IPCChannels.log.clear,
+      IPCChannels.events.sessionCreated,
+      IPCChannels.events.sessionUpdated,
+      IPCChannels.events.sessionDeleted,
     ];
 
     if (allowedChannels.includes(channel)) {
@@ -196,7 +252,7 @@ const electronAPI = {
 
   // Send app events to main process
   sendAppEvent: (eventType: string, data: any) => {
-    ipcRenderer.send("app-event", eventType, data);
+    ipcRenderer.send(IPCChannels.events.appEvent, eventType, data);
   },
 };
 
@@ -366,16 +422,17 @@ if (typeof window !== 'undefined') {
       const url = window.location.href.toLowerCase();
       
       // Skip internal/UI URLs - only process actual web pages
-      // But allow file:// URLs for dev sample in development mode
-      // Note: process.env may not be available in preload, so check for dev-sample.html
+      // But allow file:// URLs for dev sample and test booking in development mode
+      // Note: process.env may not be available in preload, so check for specific files
       const isDevSampleFile = url.includes('dev-sample.html');
+      const isTestBookingFile = url.includes('test-booking.html');
       const isInternalUrl = 
         url.startsWith('http://localhost') ||
         url.startsWith('https://localhost') ||
         url.startsWith('http://127.0.0.1') ||
         url.startsWith('https://127.0.0.1') ||
         url.startsWith('about:') ||
-        (url.startsWith('file://') && !isDevSampleFile) || // Allow dev sample file
+        (url.startsWith('file://') && !isDevSampleFile && !isTestBookingFile) || // Allow dev sample and test booking files
         url.startsWith('chrome://') ||
         url.startsWith('chrome-extension://') ||
         url === '' ||
@@ -406,7 +463,7 @@ if (typeof window !== 'undefined') {
 
       console.log(`[Preload] Sending DOM content to main process: ${wordCount} words, title: "${pageInfo.title}"`);
       // Send to main process for AI processing
-      await ipcRenderer.invoke(IPCChannels.DOM_CONTENT, {
+      await ipcRenderer.invoke(IPCChannels.dom.content, {
         tabId: getCurrentTabId(), // TODO: Get actual tab ID
         content,
         htmlContent: document.documentElement.outerHTML, // Include HTML for structure extraction
@@ -450,13 +507,13 @@ if (typeof document !== 'undefined') {
     // Command palette shortcut
     if ((event.ctrlKey || event.metaKey) && event.key === "k") {
       event.preventDefault();
-      ipcRenderer.send("command-palette:toggle");
+      ipcRenderer.send(IPCChannels.events.commandPaletteToggle);
     }
 
     // AI panel toggle
     if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === "A") {
       event.preventDefault();
-      ipcRenderer.send("ai:toggle-panel");
+      ipcRenderer.send(IPCChannels.events.aiTogglePanel);
     }
 
     // Zoom shortcuts (fallback if global shortcuts don't work)
@@ -464,15 +521,15 @@ if (typeof document !== 'undefined') {
       if (event.key === "=" || event.key === "+") {
         console.log('Preload: Zoom in triggered, preventing default');
         event.preventDefault();
-        ipcRenderer.send("zoom-in");
+        ipcRenderer.send(IPCChannels.zoom.in);
       } else if (event.key === "-") {
         console.log('Preload: Zoom out triggered, preventing default');
         event.preventDefault();
-        ipcRenderer.send("zoom-out");
+        ipcRenderer.send(IPCChannels.zoom.out);
       } else if (event.key === "0") {
         console.log('Preload: Zoom reset triggered, preventing default');
         event.preventDefault();
-        ipcRenderer.send("zoom-reset");
+        ipcRenderer.send(IPCChannels.zoom.reset);
       }
     }
   });

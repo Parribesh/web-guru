@@ -161,43 +161,109 @@ export interface AIResponse {
   };
 }
 
-// IPC Channel definitions
-export enum IPCChannels {
+// IPC Channel definitions - Organized by feature
+export const IPCChannels = {
   // Tab management
-  CREATE_TAB = 'tab:create',
-  CLOSE_TAB = 'tab:close',
-  SWITCH_TAB = 'tab:switch',
-  UPDATE_TAB = 'tab:update',
+  tab: {
+    create: 'tab:create',
+    close: 'tab:close',
+    switch: 'tab:switch',
+    update: 'tab:update',
+    getAll: 'tab:get-all',
+  },
 
   // Navigation
-  NAVIGATE = 'navigate',
-  GO_BACK = 'go-back',
-  GO_FORWARD = 'go-forward',
-  RELOAD = 'reload',
-  STOP_LOADING = 'stop-loading',
+  navigation: {
+    navigate: 'navigate',
+    goBack: 'go-back',
+    goForward: 'go-forward',
+    reload: 'reload',
+    stopLoading: 'stop-loading',
+  },
 
-  // AI services
-  AI_REQUEST = 'ai:request',
-  AI_RESPONSE = 'ai:response',
+  // Session management
+  session: {
+    create: 'session:create',
+    get: 'session:get',
+    getAll: 'session:get-all',
+    getIds: 'session:get-ids',
+    delete: 'session:delete',
+    getTabId: 'session:get-tab-id',
+    navigate: 'session:navigate',
+    showView: 'session:show-view',
+    updateBounds: 'session:update-bounds',
+  },
+
+  // Agent operations
+  agent: {
+    sendMessage: 'agent:send-message',
+  },
+
+  // QA service
+  qa: {
+    ask: 'qa:ask',
+  },
 
   // DOM extraction
-  EXTRACT_DOM = 'dom:extract',
-  DOM_CONTENT = 'dom:content',
+  dom: {
+    extract: 'dom:extract',
+    content: 'dom:content',
+  },
 
   // Window management
-  WINDOW_MINIMIZE = 'window:minimize',
-  WINDOW_MAXIMIZE = 'window:maximize',
-  WINDOW_CLOSE = 'window:close',
-  WINDOW_RESIZE = 'window:resize',
+  window: {
+    minimize: 'window:minimize',
+    maximize: 'window:maximize',
+    close: 'window:close',
+    resize: 'window:resize',
+  },
 
   // Dev tools
-  OPEN_DEV_TOOLS = 'dev-tools:open',
-  CLOSE_DEV_TOOLS = 'dev-tools:close'
-}
+  devTools: {
+    open: 'dev-tools:open',
+    close: 'dev-tools:close',
+  },
+
+  // Logging
+  log: {
+    getEvents: 'log:get-events',
+    clear: 'log:clear',
+  },
+
+  // Zoom
+  zoom: {
+    in: 'zoom:in',
+    out: 'zoom:out',
+    reset: 'zoom:reset',
+  },
+
+  // Utilities
+  utils: {
+    getTestBookingUrl: 'utils:get-test-booking-url',
+  },
+
+  // Events (one-way communication)
+  events: {
+    tabCreated: 'tab:created',
+    tabClosed: 'tab:closed',
+    tabUpdated: 'tab:update',
+    sessionCreated: 'agent:session-created',
+    sessionUpdated: 'agent:session-updated',
+    sessionDeleted: 'agent:session-deleted',
+    logEvent: 'log:event',
+    logClear: 'log:clear',
+    commandPaletteToggle: 'command-palette:toggle',
+    aiTogglePanel: 'ai:toggle-panel',
+    appEvent: 'app-event',
+  },
+} as const;
+
+// Type helper for channel values
+export type IPCChannel = typeof IPCChannels[keyof typeof IPCChannels][keyof typeof IPCChannels[keyof typeof IPCChannels]];
 
 // IPC Message types
 export interface IPCMessage<T = any> {
-  channel: IPCChannels;
+  channel: IPCChannel;
   data: T;
 }
 

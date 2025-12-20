@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron';
+import { IPCChannels } from '../../shared/types';
 
 export enum LogLevel {
   INFO = 'info',
@@ -65,7 +66,7 @@ class EventLogger {
         };
         
         // Send event to renderer
-        this.mainWindow.webContents.send('log:event', ipcEvent);
+        this.mainWindow.webContents.send(IPCChannels.events.logEvent, ipcEvent);
         
         // Debug: verify event was sent
         const msgPreview = event.message ? event.message.substring(0, 50) : 'NO MESSAGE';
@@ -150,7 +151,7 @@ class EventLogger {
   clear() {
     this.events = [];
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('log:clear');
+      this.mainWindow.webContents.send(IPCChannels.log.clear);
     }
   }
 }

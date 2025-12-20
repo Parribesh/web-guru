@@ -1,6 +1,8 @@
 import axios from 'axios';
-import { QARequest, QAResponse, RetrievedContext } from '../../shared/types';
-import { eventLogger } from '../logging/event-logger';
+import { RetrievedContext } from '../../../shared/types';
+import { eventLogger } from '../../logging/event-logger';
+import { ToolDefinition } from '../../agent/tools';
+import { ToolCall, ToolResult } from '../../agent/types';
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 // Use fastest small model by default - can be overridden with AI_MODEL env var
@@ -169,12 +171,21 @@ export async function ensureModelLoaded(): Promise<void> {
   }
 }
 
+// Legacy function - kept for backward compatibility
+// New code should use generateAnswerFromPrompt
 export async function generateAnswer(
   question: string,
   context: RetrievedContext,
   pageMetadata: { url: string; title: string }
 ): Promise<{ answer: string; prompt: string }> {
   const prompt = buildQAPrompt(question, context, pageMetadata);
+  return generateAnswerFromPrompt(prompt);
+}
+
+// New simplified function - takes only prompt
+export async function generateAnswerFromPrompt(
+  prompt: string
+): Promise<{ answer: string; prompt: string }> {
 
   // Try both IPv4 and IPv6 - use the working URL from connection check
   const urls = [
@@ -213,7 +224,7 @@ export async function generateAnswer(
         if (response.status === 200 && response.data.response) {
           const duration = Date.now() - startTime;
           eventLogger.success('Ollama', `Answer generated successfully (${duration}ms)`);
-          return { answer: response.data.response, prompt };
+          return { answer: response.data.response, prompt: prompt };
       } else {
         eventLogger.warning('Ollama', `Unexpected response from ${url}`, { status: response.status, data: response.data });
         lastError = new Error(`Unexpected response: ${response.status}`);
@@ -246,66 +257,150 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-// Limit chunk content to prevent prompt from being too long
-// Ollama has a context limit, so we need to be conservative
-// Reduced for faster responses
-const MAX_PROMPT_TOKENS = 1200; // Reduced from 2000 to 1200 for much faster processing
-const MAX_CHARS_PER_CHUNK = 800; // ~200 tokens per chunk max (matches chunking size - increased from 400)
-
+// buildQAPrompt moved to agent/prompts/builder.ts
+// This function is kept for backward compatibility but should use the prompt builder
 export function buildQAPrompt(
   question: string,
   context: RetrievedContext,
   pageMetadata: { url: string; title: string }
 ): string {
-  // Limit chunks and truncate content to fit within token budget
-  let totalChars = 0;
-  // More concise prompt for faster processing
-  const questionAndInstructions = `Answer this question using ONLY the content below. Be concise and accurate.
+  // Import dynamically to avoid circular dependency
+  const { buildPrompt } = require('../prompts/builder');
+  return buildPrompt(question, context, pageMetadata);
+}
 
-Question: ${question}
-Page: ${pageMetadata.title}
-
-Content:
-`;
-
-  // Reduced available chars for faster processing
-  const availableChars = (MAX_PROMPT_TOKENS * 3) - questionAndInstructions.length - 300; // Reduced safety margin
+/**
+ * Generate answer with tool calling support
+ * This function handles AI responses that may include tool calls, executes them, and continues the conversation
+ */
+export async function generateAnswerWithTools(
+  question: string,
+  pageContext: string,
+  availableTools: ToolDefinition[],
+  executeToolCallback: (toolCall: ToolCall) => Promise<ToolResult>
+): Promise<{ success: boolean; answer?: string; error?: string }> {
+  const maxIterations = 5; // Prevent infinite loops
+  let iteration = 0;
+  let conversationHistory: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [];
   
-  const limitedChunks: string[] = [];
-  for (let i = 0; i < context.primaryChunks.length; i++) {
-    const chunk = context.primaryChunks[i];
-    const chunkContent = chunk.content || '';
+  // Format tools for the prompt
+  const toolsDescription = availableTools.map(tool => {
+    const params = Object.entries(tool.parameters.properties)
+      .map(([name, desc]) => `  - ${name} (${desc.type}): ${desc.description}`)
+      .join('\n');
+    return `${tool.name}: ${tool.description}\nParameters:\n${params}`;
+  }).join('\n\n');
+
+  while (iteration < maxIterations) {
+    iteration++;
     
-    // Chunks should already be split to 400 chars max during chunking
-    // If we find a chunk that's too large, log a warning but don't truncate
-    if (chunkContent.length > MAX_CHARS_PER_CHUNK * 1.5) {
-      eventLogger.warning('Ollama', `Chunk ${i + 1} is ${chunkContent.length} chars (expected max ${MAX_CHARS_PER_CHUNK}). This should have been split during chunking.`);
+    // Build prompt with tools
+    const systemPrompt = `You are an AI assistant that can interact with web pages using tools. 
+You have access to the following tools:
+
+${toolsDescription}
+
+When the user asks you to perform actions (like filling forms, clicking buttons, etc.), you should:
+1. Use the appropriate tools to accomplish the task
+2. Format tool calls as JSON: {"tool": "toolName", "params": {"param1": "value1", ...}}
+3. After tools are executed, you'll receive the results
+4. Continue with the task or provide a summary
+
+Current page context:
+${pageContext.substring(0, 1500)}`;
+
+    const userPrompt = question;
+    
+    // Add conversation history
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...conversationHistory,
+      { role: 'user', content: userPrompt }
+    ];
+
+    const fullPrompt = messages.map(m => `${m.role}: ${m.content}`).join('\n\n');
+
+    try {
+      // Call Ollama
+      const response = await axios.post(
+        `${OLLAMA_BASE_URL}/api/generate`,
+        {
+          model: activeModel,
+          prompt: fullPrompt,
+          stream: false,
+          options: {
+            temperature: 0.7,
+            top_p: 0.9,
+          },
+        },
+        {
+          timeout: 60000,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const responseText = response.data.response?.trim() || '';
+      
+      // Try to parse tool calls from response
+      const toolCallMatch = responseText.match(/\{"tool":\s*"([^"]+)",\s*"params":\s*({[^}]+})/);
+      
+      if (toolCallMatch) {
+        const toolName = toolCallMatch[1];
+        const paramsStr = toolCallMatch[2];
+        
+        try {
+          const params = JSON.parse(paramsStr);
+          const toolCall: ToolCall = {
+            id: `tool-${Date.now()}-${Math.random()}`,
+            name: toolName,
+            params,
+            timestamp: Date.now(),
+          };
+          
+          // Execute tool
+          const toolResult: ToolResult = await executeToolCallback(toolCall);
+          
+          // Add to conversation history
+          conversationHistory.push({ role: 'assistant', content: responseText });
+          conversationHistory.push({ 
+            role: 'tool', 
+            content: toolResult.success 
+              ? JSON.stringify(toolResult.result) 
+              : `Error: ${toolResult.error}` 
+          });
+          
+          // Continue conversation with tool result
+          question = `Tool executed. Result: ${toolResult.success ? JSON.stringify(toolResult.result) : toolResult.error}. Continue with the task.`;
+          continue; // Loop to continue conversation
+        } catch (parseError) {
+          // If tool call parsing fails, treat as regular response
+          return {
+            success: true,
+            answer: responseText,
+          };
+        }
+      } else {
+        // No tool call, return the response
+        return {
+          success: true,
+          answer: responseText,
+        };
+      }
+    } catch (error: any) {
+      eventLogger.error('Ollama', 'Tool calling failed', error.message || error);
+      return {
+        success: false,
+        error: error.message || 'Failed to generate answer with tools',
+      };
     }
-    
-    const heading = chunk.metadata.heading ? `\n### ${chunk.metadata.heading}\n` : '';
-    const chunkText = `${heading}[Relevant Content ${i + 1}]\n${chunkContent}\n`;
-    
-    // Check if adding this chunk would exceed our limit
-    if (totalChars + chunkText.length > availableChars) {
-      eventLogger.warning('Ollama', `Stopping at chunk ${i + 1}/${context.primaryChunks.length} to stay within token limit`);
-      break;
-    }
-    
-    limitedChunks.push(chunkText);
-    totalChars += chunkText.length;
-  }
-
-  const chunksText = limitedChunks.join('\n---\n\n');
-  
-  const finalPrompt = questionAndInstructions + chunksText + '\n\nAnswer:';
-  
-  const estimatedTokens = estimateTokens(finalPrompt);
-  eventLogger.info('Ollama', `Prompt size: ~${estimatedTokens} tokens (${finalPrompt.length} chars), using ${limitedChunks.length}/${context.primaryChunks.length} chunks`);
-  
-  if (estimatedTokens > MAX_PROMPT_TOKENS) {
-    eventLogger.warning('Ollama', `Prompt may exceed token limit (${estimatedTokens} > ${MAX_PROMPT_TOKENS})`);
   }
   
-  return finalPrompt;
+  // Max iterations reached
+  return {
+    success: false,
+    error: 'Maximum iterations reached. The task may be too complex.',
+  };
 }
 

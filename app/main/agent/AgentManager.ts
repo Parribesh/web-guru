@@ -1,227 +1,203 @@
-import { EventEmitter } from 'events';
-import { v4 as uuidv4 } from 'uuid';
-import { BrowserWindow } from 'electron';
-import { AgentSession, AgentState, SessionCreateRequest, SessionUpdate, MessageRole } from './types';
-import { AgentSessionManager } from './AgentSession';
+// Agent Manager - Manages agent operations for a specific session
+
+import { BrowserView } from 'electron';
+import { AgentState, MessageRole, ToolCall, ToolResult } from './types';
+import { AgentSessionState } from './AgentSessionState';
+import { AgentService } from './AgentService';
 import { TabManager } from '../tabs';
+import { DOM_TOOLS, executeTool } from './tools';
+import { generateAnswerWithTools } from './llm/ollama';
+import { answerQuestion } from './qa/service';
+import { getCachedContent } from './rag/cache';
 
-export class AgentManager extends EventEmitter {
-  private sessions: Map<string, AgentSessionManager> = new Map();
-  private sessionTabMap: Map<string, string> = new Map(); // sessionId -> tabId mapping
-  private mainWindow: BrowserWindow;
+export class AgentManager {
+  private sessionId: string;
+  private tabId: string;
   private tabManager: TabManager;
+  private sessionState: AgentSessionState;
+  private agentService: AgentService;
+  private broadcastCallback: ((session: any) => void) | null = null;
 
-  constructor(mainWindow: BrowserWindow, tabManager: TabManager) {
-    super();
-    this.mainWindow = mainWindow;
+  constructor(
+    sessionId: string,
+    tabId: string,
+    tabManager: TabManager,
+    sessionState: AgentSessionState
+  ) {
+    this.sessionId = sessionId;
+    this.tabId = tabId;
     this.tabManager = tabManager;
+    this.sessionState = sessionState;
+    this.agentService = new AgentService(sessionState);
   }
 
-  async createSession(request: SessionCreateRequest = {}): Promise<AgentSession> {
-    const sessionId = uuidv4();
-    const sessionManager = new AgentSessionManager(sessionId, request.url);
-    
-    this.sessions.set(sessionId, sessionManager);
-
-    // Create a BrowserView/tab for this session
-    // Always create a tab, even if no URL (will show blank)
-    const tabId = await this.tabManager.createTab(request.url);
-    // Store tabId mapping separately (not in session object which gets serialized)
-    this.sessionTabMap.set(sessionId, tabId);
-    const session = sessionManager.getSession()!;
-    
-    // Emit session created event (send serialized version)
-    const serialized = this.serializeSession(session);
-    this.emit('session:created', serialized);
-    this.mainWindow.webContents.send('agent:session-created', serialized);
-
-    // If initial message provided, process it
-    if (request.initialMessage) {
-      this.sendMessage(sessionId, request.initialMessage);
-    }
-
-    return session;
-  }
-
-  getSession(sessionId: string): AgentSession | null {
-    const sessionManager = this.sessions.get(sessionId);
-    return sessionManager?.getSession() || null;
-  }
-
-  getAllSessions(): AgentSession[] {
-    return Array.from(this.sessions.values())
-      .map(manager => manager.getSession()!)
-      .filter(session => session !== null);
-  }
-
-  sendMessage(sessionId: string, content: string): void {
-    const sessionManager = this.sessions.get(sessionId);
-    if (!sessionManager) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-
-    const session = sessionManager.getSession()!;
-    
-    // Add user message
-    sessionManager.addMessage(MessageRole.USER, content);
-    sessionManager.updateState(AgentState.THINKING);
-    this.broadcastSessionUpdate(sessionManager.getSession()!);
-
-    // TODO: Process with AI agent
-    // For now, just add a placeholder response
-    setTimeout(() => {
-      sessionManager.addMessage(MessageRole.ASSISTANT, 'I received your message. AI processing will be implemented here.');
-      sessionManager.updateState(AgentState.IDLE);
-      this.broadcastSessionUpdate(sessionManager.getSession()!);
-    }, 500);
+  setBroadcastCallback(callback: (session: any) => void): void {
+    this.broadcastCallback = callback;
   }
 
   /**
-   * Ask a question to a session-specific agent using RAG system
-   * This method:
-   * 1. Gets the tabId for this session
-   * 2. Uses the RAG/QA system to answer using cached chunks for that tab
-   * 3. Updates the session with the response
-   * 4. Broadcasts updates to UI in real-time
+   * Ask a question to the agent using RAG system
    */
-  async askQuestion(sessionId: string, question: string): Promise<{
+  async askQuestion(question: string): Promise<{
     success: boolean;
     answer?: string;
     error?: string;
     relevantChunks?: any[];
     prompt?: string;
   }> {
-    const sessionManager = this.sessions.get(sessionId);
-    if (!sessionManager) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-
-    // Get tabId for this session
-    const tabId = this.sessionTabMap.get(sessionId);
-    if (!tabId) {
-      throw new Error(`Session ${sessionId} has no associated tab`);
-    }
-
-    const session = sessionManager.getSession()!;
+    const session = this.sessionState.getSession();
     
-    // Add user message and update state
-    sessionManager.addMessage(MessageRole.USER, question);
-    sessionManager.updateState(AgentState.THINKING);
-    this.broadcastSessionUpdate(sessionManager.getSession()!);
+    // Add user message using AgentService
+    this.agentService.addMessage(MessageRole.USER, question);
+    this.agentService.updateState(AgentState.THINKING);
+    this.broadcastUpdate(session);
 
     try {
-      // Import QA service dynamically
-      const { answerQuestion } = await import('../rag/qa-service');
-      
-      // Create QA request using tabId (which has the cached content)
-      const qaRequest = {
+      // Use QA service to get answer
+      const qaResponse = await answerQuestion({
         question,
-        tabId,
+        tabId: this.tabId,
         context: {
           url: session.url || '',
-          title: session.title || ''
-        }
-      };
+          title: session.title || '',
+        },
+      });
 
-      // Get answer from RAG system
-      const qaResponse = await answerQuestion(qaRequest);
-
-      // Update session with response
       if (qaResponse.success) {
-        sessionManager.addMessage(MessageRole.ASSISTANT, qaResponse.answer);
+        // Add assistant message using AgentService
+        const messageId = this.agentService.addMessage(MessageRole.ASSISTANT, qaResponse.answer);
         
-        // Store additional data in the last message
-        const session = sessionManager.getSession()!;
-        const lastMessage = session.messages[session.messages.length - 1];
-        if (lastMessage) {
-          (lastMessage as any).data = {
+        // Store additional data (relevantChunks, prompt, etc.)
+        if (qaResponse.relevantChunks) {
+          this.agentService.updateMessageData(messageId, {
             relevantChunks: qaResponse.relevantChunks,
             sourceLocation: qaResponse.sourceLocation,
-            prompt: qaResponse.prompt
-          };
+            prompt: qaResponse.prompt,
+          });
         }
-      } else {
-        sessionManager.addMessage(MessageRole.ASSISTANT, qaResponse.error || 'Failed to get response');
-      }
+        
+        this.agentService.updateState(AgentState.IDLE);
+        this.broadcastUpdate(this.sessionState.getSession());
 
-      sessionManager.updateState(AgentState.IDLE);
-      this.broadcastSessionUpdate(sessionManager.getSession()!);
+        return {
+          success: true,
+          answer: qaResponse.answer,
+          relevantChunks: qaResponse.relevantChunks,
+          prompt: qaResponse.prompt,
+        };
+      } else {
+        this.agentService.addMessage(MessageRole.ASSISTANT, qaResponse.error || 'Failed to get response');
+        this.agentService.updateState(AgentState.IDLE);
+        this.broadcastUpdate(this.sessionState.getSession());
+
+        return {
+          success: false,
+          error: qaResponse.error,
+        };
+      }
+    } catch (error: any) {
+      const errorMessage = error.message || 'Unknown error';
+      this.agentService.addMessage(MessageRole.ASSISTANT, `Error: ${errorMessage}`);
+      this.agentService.updateState(AgentState.IDLE);
+      this.broadcastUpdate(this.sessionState.getSession());
 
       return {
-        success: qaResponse.success,
-        answer: qaResponse.answer,
-        error: qaResponse.error,
-        relevantChunks: qaResponse.relevantChunks,
-        prompt: qaResponse.prompt
+        success: false,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Ask a question with tool calling support (for DOM interaction)
+   */
+  async askQuestionWithTools(question: string): Promise<{
+    success: boolean;
+    answer?: string;
+    error?: string;
+  }> {
+    const session = this.sessionState.getSession();
+    const browserView = this.tabManager.getBrowserView(this.tabId);
+    
+    if (!browserView) {
+      throw new Error(`BrowserView not found for tab ${this.tabId}`);
+    }
+
+    // Add user message using AgentService
+    this.agentService.addMessage(MessageRole.USER, question);
+    this.agentService.updateState(AgentState.THINKING);
+    this.broadcastUpdate(session);
+
+    try {
+      // Get page content for context
+      const cache = getCachedContent(this.tabId);
+      
+      if (!cache) {
+        this.agentService.addMessage(MessageRole.ASSISTANT, 'Page content not cached. Please wait for page to load completely.');
+        this.agentService.updateState(AgentState.IDLE);
+        this.broadcastUpdate(this.sessionState.getSession());
+        return {
+          success: false,
+          error: 'Page content not cached. Please wait for page to load completely.',
+        };
+      }
+
+      // Build context from cached content
+      const pageContext = cache.pageContent.extractedText.substring(0, 2000);
+      
+      // Call AI with tool definitions
+      const response = await generateAnswerWithTools(
+        question,
+        pageContext,
+        DOM_TOOLS,
+        async (toolCall: ToolCall) => {
+          // Execute tool
+          this.agentService.updateState(AgentState.EXECUTING_TOOL);
+          this.broadcastUpdate(this.sessionState.getSession());
+          
+          const toolResult = await executeTool(toolCall, browserView);
+          
+          // Add tool call and result using AgentService
+          const messageId = this.agentService.addMessage(MessageRole.ASSISTANT, `Executing ${toolCall.name}...`);
+          this.agentService.addToolCall(messageId, toolCall);
+          this.agentService.addToolResult(messageId, toolResult);
+          this.broadcastUpdate(this.sessionState.getSession());
+          
+          return toolResult;
+        }
+      );
+
+      // Add final response using AgentService
+      this.agentService.addMessage(MessageRole.ASSISTANT, response.answer || response.error || 'Task completed');
+      this.agentService.updateState(AgentState.IDLE);
+      this.broadcastUpdate(this.sessionState.getSession());
+
+      return {
+        success: response.success,
+        answer: response.answer,
+        error: response.error,
       };
     } catch (error: any) {
       const errorMessage = error.message || 'Unknown error';
-      sessionManager.addMessage(MessageRole.ASSISTANT, `Error: ${errorMessage}`);
-      sessionManager.updateState(AgentState.IDLE);
-      this.broadcastSessionUpdate(sessionManager.getSession()!);
+      this.agentService.addMessage(MessageRole.ASSISTANT, `Error: ${errorMessage}`);
+      this.agentService.updateState(AgentState.IDLE);
+      this.broadcastUpdate(this.sessionState.getSession());
       
       return {
         success: false,
-        error: errorMessage
+        error: errorMessage,
       };
     }
   }
 
-  updateSessionState(sessionId: string, state: AgentState): void {
-    const sessionManager = this.sessions.get(sessionId);
-    if (!sessionManager) return;
-
-    sessionManager.updateState(state);
-    this.broadcastSessionUpdate(sessionManager.getSession()!);
+  getBrowserView(): BrowserView | null {
+    return this.tabManager.getBrowserView(this.tabId);
   }
 
-  deleteSession(sessionId: string): boolean {
-    const sessionManager = this.sessions.get(sessionId);
-    if (!sessionManager) return false;
-
-    // Clean up tab mapping
-    this.sessionTabMap.delete(sessionId);
-
-    sessionManager.destroy();
-    this.sessions.delete(sessionId);
-
-    this.emit('session:deleted', sessionId);
-    this.mainWindow.webContents.send('agent:session-deleted', sessionId);
-
-    return true;
-  }
-
-  getTabId(sessionId: string): string | null {
-    return this.sessionTabMap.get(sessionId) || null;
-  }
-
-  private serializeSession(session: AgentSession): AgentSession {
-    // Use JSON to create a clean, serializable copy
-    // This removes any non-serializable properties like tabId, functions, etc.
-    const serialized = JSON.parse(JSON.stringify(session));
-    // Explicitly remove tabId if it exists (it's only for main process)
-    if ((serialized as any).tabId) {
-      delete (serialized as any).tabId;
+  private broadcastUpdate(session: any): void {
+    if (this.broadcastCallback) {
+      this.broadcastCallback(session);
     }
-    return serialized as AgentSession;
-  }
-
-  broadcastSessionUpdate(session: AgentSession): void {
-    // Emit to main process listeners (can use original)
-    this.emit('session:updated', session);
-    
-    // Send to renderer via IPC (must be serializable)
-    const serialized = this.serializeSession(session);
-    console.log(`[AgentManager] Broadcasting session update for: ${session.id} (${session.messages.length} messages, state: ${session.state})`);
-    this.mainWindow.webContents.send('agent:session-updated', serialized);
-    console.log(`[AgentManager] ✅ Event sent to renderer via IPC`);
-  }
-
-  // Clean up on window close
-  destroy(): void {
-    this.sessions.forEach(manager => manager.destroy());
-    this.sessions.clear();
-    this.removeAllListeners();
   }
 }
 

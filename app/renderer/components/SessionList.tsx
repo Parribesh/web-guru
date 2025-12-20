@@ -1,5 +1,21 @@
 import React, { useState, useEffect } from 'react';
 
+// Helper function to get test booking URL
+async function getTestBookingUrl(): Promise<string> {
+  const electronAPI = (window as any).electronAPI;
+  if (electronAPI?.utils?.getTestBookingUrl) {
+    try {
+      const url = await electronAPI.utils.getTestBookingUrl();
+      if (url) return url;
+    } catch (error) {
+      console.warn('Could not get test booking URL from main process:', error);
+    }
+  }
+  
+  // Fallback: throw error - user should see this
+  throw new Error('Could not get test booking URL - IPC not available');
+}
+
 interface AgentSession {
   id: string;
   url: string;
@@ -37,12 +53,35 @@ export const SessionList: React.FC<SessionListProps> = ({
             <div className="text-8xl mb-6 animate-pulse">🤖</div>
             <h1 className="text-3xl font-bold text-gray-900 mb-3">Welcome to AI Browser</h1>
             <p className="text-lg text-gray-600 mb-8">Start a new session to begin working with your AI agent</p>
-            <button
-              onClick={onCreateSession}
-              className="px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all font-semibold text-lg shadow-lg hover:shadow-xl transform hover:scale-105"
-            >
-              Start New Session
-            </button>
+            <div className="flex flex-col gap-4">
+              <button
+                onClick={onCreateSession}
+                className="px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all font-semibold text-lg shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                Start New Session
+              </button>
+              <button
+                onClick={async () => {
+                  const electronAPI = (window as any).electronAPI;
+                  if (!electronAPI?.sessions) {
+                    console.error('electronAPI.sessions not available');
+                    return;
+                  }
+                  try {
+                    const testBookingUrl = await getTestBookingUrl();
+                    const session = await electronAPI.sessions.create({ url: testBookingUrl });
+                    console.log('Test booking session created:', session);
+                  } catch (error) {
+                    console.error('Failed to create test session:', error);
+                    // Fallback to regular session creation
+                    onCreateSession();
+                  }
+                }}
+                className="px-8 py-4 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl hover:from-purple-700 hover:to-purple-800 transition-all font-semibold text-lg shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                🧪 Start Test Booking Website
+              </button>
+            </div>
           </div>
         </div>
       ) : (
@@ -63,6 +102,29 @@ export const SessionList: React.FC<SessionListProps> = ({
                   ↻ Refresh
                 </button>
               )}
+              <button
+                onClick={async () => {
+                  const electronAPI = (window as any).electronAPI;
+                  if (!electronAPI?.sessions) {
+                    console.error('electronAPI.sessions not available');
+                    return;
+                  }
+                  try {
+                    // Get test booking URL from main process
+                    const testBookingUrl = await getTestBookingUrl();
+                    const session = await electronAPI.sessions.create({ url: testBookingUrl });
+                    console.log('Test booking session created:', session);
+                  } catch (error) {
+                    console.error('Failed to create test session:', error);
+                    // Fallback to regular session creation
+                    onCreateSession();
+                  }
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 transition-colors text-sm font-medium shadow-md"
+                title="Start a session with the test booking website"
+              >
+                🧪 Test Website
+              </button>
               <button
                 onClick={onCreateSession}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium shadow-md"

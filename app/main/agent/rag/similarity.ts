@@ -1,4 +1,4 @@
-import { ContentChunk, SearchResult } from '../../shared/types';
+import { ContentChunk, SearchResult } from '../../../shared/types';
 
 export function cosineSimilarity(vec1: number[], vec2: number[]): number {
   if (vec1.length !== vec2.length) {

@@ -49,6 +49,13 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
 
     // Listen for new events
     const handleLogEvent = (event: LogEvent) => {
+
+      // Validate event exists
+      if (!event || typeof event !== 'object') {
+        console.warn('[EventLog] Invalid event (not an object):', event);
+        return;
+      }
+
       // Debug: log received events
       console.log('[EventLog] Received event:', { 
         id: event?.id, 
@@ -57,11 +64,6 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
         message: event?.message ? event.message.substring(0, 50) : 'NO MESSAGE'
       });
       
-      // Validate event exists
-      if (!event || typeof event !== 'object') {
-        console.warn('[EventLog] Invalid event (not an object):', event);
-        return;
-      }
       
       // Ensure timestamp is valid
       if (!event.timestamp || isNaN(event.timestamp)) {
@@ -117,14 +119,6 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
         } catch (error) {
           console.error('[EventLog] Failed to remove event listener:', error);
         }
-      }
-    };
-
-    return () => {
-      try {
-        ((window as any).electronAPI as any)?.off('log:event', handleLogEvent);
-      } catch (error) {
-        // Ignore cleanup errors
       }
     };
   }, []);

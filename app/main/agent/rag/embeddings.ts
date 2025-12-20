@@ -1,5 +1,5 @@
-import { ContentChunk } from '../../shared/types';
-import { eventLogger } from '../logging/event-logger';
+import { ContentChunk } from '../../../shared/types';
+import { eventLogger } from '../../logging/event-logger';
 
 // Lazy load the embedding model
 let embeddingPipeline: any = null;

@@ -32,16 +32,18 @@ interface ElectronAPIWithSessions {
     }) => Promise<AgentSession>;
     get: (sessionId: string) => Promise<AgentSession | null>;
     getAll: () => Promise<AgentSession[]>;
-    sendMessage: (
-      sessionId: string,
-      content: string
-    ) => Promise<{ success: boolean }>;
     delete: (sessionId: string) => Promise<boolean>;
     navigate: (sessionId: string, url: string) => Promise<{ success: boolean }>;
     showView: (sessionId: string | null) => Promise<{ success: boolean }>;
     updateViewBounds: (
       sessionId: string,
       bounds: { x: number; y: number; width: number; height: number }
+    ) => Promise<{ success: boolean }>;
+  };
+  agent: {
+    sendMessage: (
+      sessionId: string,
+      content: string
     ) => Promise<{ success: boolean }>;
   };
   on: (channel: string, callback: (...args: any[]) => void) => void;
@@ -248,9 +250,9 @@ const App: React.FC = () => {
   const handleSendMessage = async (content: string) => {
     if (!selectedSessionId) return;
     const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
-    if (!electronAPI?.sessions) return;
+    if (!electronAPI?.agent) return;
     try {
-      await electronAPI.sessions.sendMessage(selectedSessionId, content);
+      await electronAPI.agent.sendMessage(selectedSessionId, content);
       // Session will be updated via event listener
     } catch (error) {
       console.error("Failed to send message:", error);

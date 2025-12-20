@@ -3,7 +3,34 @@
 
 import React from 'react';
 
-export const Home: React.FC = () => {
+interface HomeProps {
+  onCreateSession?: (url?: string) => void;
+}
+
+export const Home: React.FC<HomeProps> = ({ onCreateSession }) => {
+  const handleTestWebsite = async () => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI?.sessions) {
+      console.error('electronAPI.sessions not available');
+      return;
+    }
+
+    // Get the test booking HTML file path using IPC
+    // We'll use a helper function in the main process
+    try {
+      // For now, construct the path - the main process will handle file:// URL conversion
+      // The file is at app/test-booking.html relative to project root
+      const testBookingPath = await electronAPI.invoke?.('get-test-booking-url') || 
+        'file://' + window.location.origin.replace(/\/renderer.*$/, '') + '/test-booking.html';
+      
+      console.log('Creating session with test booking website:', testBookingPath);
+      const session = await electronAPI.sessions.create({ url: testBookingPath });
+      console.log('Session created:', session);
+    } catch (error) {
+      console.error('Failed to create test session:', error);
+    }
+  };
+
   return (
     <div style={{
       display: 'flex',
@@ -56,6 +83,22 @@ export const Home: React.FC = () => {
           }}
         >
           Open AI Assistant
+        </button>
+
+        <button
+          style={{
+            padding: '12px 24px',
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: 'bold'
+          }}
+          onClick={handleTestWebsite}
+        >
+          🧪 Test Booking Website
         </button>
       </div>
     </div>
