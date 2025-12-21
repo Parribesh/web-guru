@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AddressBar } from './AddressBar';
 import { AIChatPanel } from '../ai-ui/AIChatPanel';
 import { EventLog } from './EventLog';
 import { EmbeddingProgress } from './EmbeddingProgress';
+import { NavigationBar } from './NavigationBar';
 import { AIResponse } from '../../shared/types';
 
 interface AgentMessage {
@@ -47,6 +49,7 @@ export const SessionView: React.FC<SessionViewProps> = ({
   const [chatMessages, setChatMessages] = useState<Array<{ from: 'user' | 'ai'; content: string; data?: any }>>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isEventLogOpen, setIsEventLogOpen] = useState(false);
+  const navigate = useNavigate();
   
   console.log('SessionView render:', {
     sessionId: session.id,
@@ -182,6 +185,9 @@ export const SessionView: React.FC<SessionViewProps> = ({
 
   return (
     <div className="flex flex-col h-screen w-screen bg-white overflow-hidden" style={{ minHeight: '100vh', minWidth: '100vw' }}>
+      {/* Navigation Bar */}
+      <NavigationBar sessionId={session.id} />
+      
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-300 bg-white shadow-sm z-10">
         <div className="flex items-center gap-4">
@@ -329,8 +335,14 @@ export const SessionView: React.FC<SessionViewProps> = ({
             />
           </div>
 
-          {/* Event Log Toggle Button */}
-          <div className="border-t border-gray-200 px-4 py-2 bg-gray-50">
+          {/* Toggle Buttons */}
+          <div className="border-t border-gray-200 px-4 py-2 bg-gray-50 space-y-2">
+            <button
+              onClick={() => navigate(`/session/${session.id}/chunks`)}
+              className="w-full px-3 py-2 text-xs font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              📋 View Chunks
+            </button>
             <button
               onClick={() => setIsEventLogOpen(!isEventLogOpen)}
               className="w-full px-3 py-2 text-xs font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"

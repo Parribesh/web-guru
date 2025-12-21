@@ -54,24 +54,28 @@ export function setupDOMHandlers(tabManager: TabManager): void {
       return { success: true, skipped: true };
     }
 
-    // Cache page content for QA system
-    try {
-      await cachePageContent(
-        actualTabId,
-        data.content,
-        data.htmlContent || '',
-        data.url,
-        data.title
-      );
-      console.log(`✅ Cached page content for tab ${actualTabId}`);
-      eventLogger.success('QA Service', `Successfully cached page content for tab ${actualTabId}`);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`❌ Failed to cache page content for tab ${actualTabId}:`, error);
-      eventLogger.error('QA Service', `Failed to cache page content for tab ${actualTabId}`, errorMessage);
-    }
+    // Cache page content for QA system (non-blocking)
+    // Use setImmediate to make this async and not block the IPC handler
+    setImmediate(async () => {
+      try {
+        await cachePageContent(
+          actualTabId,
+          data.content,
+          data.htmlContent || '',
+          data.url,
+          data.title
+        );
+        console.log(`✅ Cached page content for tab ${actualTabId}`);
+        eventLogger.success('QA Service', `Successfully cached page content for tab ${actualTabId}`);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`❌ Failed to cache page content for tab ${actualTabId}:`, error);
+        eventLogger.error('QA Service', `Failed to cache page content for tab ${actualTabId}`, errorMessage);
+      }
+    });
 
-    return { success: true };
+    // Return immediately - processing happens asynchronously
+    return { success: true, processing: true };
   });
 }
 

@@ -39,9 +39,36 @@ export interface AIRequest {
 }
 
 // RAG System Types
+export type ComponentType = 'form' | 'button' | 'input-group' | 'table' | 'list' | 'text' | 'section' | 'heading';
+
+export interface DOMComponent {
+  type: ComponentType;
+  id: string;
+  selector: string; // CSS selector
+  attributes: Record<string, string>; // id, name, class, type, etc.
+  textContent: string; // Text for RAG
+  metadata: {
+    isInteractive: boolean;
+    formId?: string; // If input, which form it belongs to
+    inputType?: string; // text, email, submit, etc.
+    label?: string; // Label text for inputs
+    placeholder?: string;
+    required?: boolean;
+    children?: string[]; // IDs of child components
+    parentId?: string; // ID of parent component
+    // Semantic context for forms
+    formPurpose?: string; // Inferred purpose (e.g., "booking form", "contact form")
+    formHeading?: string; // Heading near the form
+    formDescription?: string; // Description text near the form
+  };
+}
+
 export interface ContentChunk {
   id: string;
   content: string;
+  componentType: ComponentType; // Type of component this chunk represents
+  componentData?: DOMComponent; // Component information if this is a component chunk
+  nestedChunks?: ContentChunk[]; // Nested chunks for composite components (e.g., form contains input-group and button chunks)
   metadata: {
     sectionId?: string;
     heading?: string;
@@ -192,6 +219,7 @@ export const IPCChannels = {
     navigate: 'session:navigate',
     showView: 'session:show-view',
     updateBounds: 'session:update-bounds',
+    getChunks: 'session:get-chunks',
   },
 
   // Agent operations

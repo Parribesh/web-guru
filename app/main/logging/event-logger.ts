@@ -1,5 +1,7 @@
 import { BrowserWindow } from 'electron';
 import { IPCChannels } from '../../shared/types';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export enum LogLevel {
   INFO = 'info',
@@ -28,9 +30,56 @@ class EventLogger {
   private eventIdCounter = 0;
   private maxEvents = 1000; // Keep last 1000 events
   private events: LogEvent[] = [];
+  private logFilePath: string;
+  private logFileStream: fs.WriteStream | null = null;
+
+  constructor() {
+    // Set log file path in project directory
+    this.logFilePath = path.join(process.cwd(), 'app.log');
+    
+    // Clear existing log file on startup for fresh logs per execution
+    try {
+      if (fs.existsSync(this.logFilePath)) {
+        fs.unlinkSync(this.logFilePath);
+      }
+    } catch (error) {
+      console.warn('[EventLogger] Failed to clear existing log file:', error);
+      // Continue anyway - we'll try to create a new one
+    }
+    
+    // Create write stream for logging (truncate mode to ensure fresh start)
+    try {
+      this.logFileStream = fs.createWriteStream(this.logFilePath, { flags: 'w' });
+      this.logFileStream.write(`=== Application started at ${new Date().toISOString()} ===\n`);
+    } catch (error) {
+      console.error('[EventLogger] Failed to create log file:', error);
+      this.logFileStream = null;
+    }
+  }
 
   setMainWindow(window: BrowserWindow) {
     this.mainWindow = window;
+  }
+
+  private writeToLogFile(event: LogEvent): void {
+    if (!this.logFileStream) {
+      return;
+    }
+
+    try {
+      const timestamp = new Date(event.timestamp).toISOString();
+      const level = event.level.toUpperCase().padEnd(7);
+      const category = event.category.padEnd(15);
+      const message = event.message;
+      const progress = event.progress ? ` [${event.progress.current}/${event.progress.total} (${event.progress.percentage}%)]` : '';
+      const details = event.details ? ` | Details: ${JSON.stringify(event.details)}` : '';
+      
+      const logLine = `[${timestamp}] ${level} [${category}] ${message}${progress}${details}\n`;
+      this.logFileStream.write(logLine);
+    } catch (error) {
+      // Silently fail - don't break logging if file write fails
+      console.error('[EventLogger] Failed to write to log file:', error);
+    }
   }
 
   private generateId(): string {
@@ -42,6 +91,9 @@ class EventLogger {
     if (!event.timestamp || isNaN(event.timestamp)) {
       event.timestamp = Date.now();
     }
+    
+    // Write to log file
+    this.writeToLogFile(event);
     
     // Store event
     this.events.push(event);
@@ -115,7 +167,29 @@ class EventLogger {
       } : undefined,
     };
 
+    // Also log to console
+    const consoleMethod = this.getConsoleMethod(level);
+    const logPrefix = `[${category}]`;
+    if (details) {
+      consoleMethod(logPrefix, message, details);
+    } else {
+      consoleMethod(logPrefix, message);
+    }
+
     this.emit(event);
+  }
+
+  // Cleanup method to close log file
+  shutdown(): void {
+    if (this.logFileStream) {
+      try {
+        this.logFileStream.write(`\n=== Application shutdown at ${new Date().toISOString()} ===\n`);
+        this.logFileStream.end();
+        this.logFileStream = null;
+      } catch (error) {
+        console.error('[EventLogger] Failed to close log file:', error);
+      }
+    }
   }
 
   info(category: string, message: string, details?: any) {

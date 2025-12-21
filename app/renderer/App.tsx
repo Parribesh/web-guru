@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
+import { BrowserRouter, Routes, Route, useNavigate, useParams } from "react-router-dom";
 import { SessionList } from "./components/SessionList";
 import { SessionView } from "./components/SessionView";
+import { ChunksPage } from "./pages/ChunksPage";
+import { DebugView } from "./pages/DebugView";
 
 interface AgentMessage {
   id: string;
@@ -52,6 +55,122 @@ interface ElectronAPIWithSessions {
 }
 
 // Use type assertion - electronAPI is already declared in preload
+
+// Wrapper component for SessionView to access route params
+const SessionViewWrapper: React.FC = () => {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  const [session, setSession] = useState<AgentSession | null>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (!electronAPI?.sessions) return;
+
+    const loadSession = async () => {
+      try {
+        const loadedSession = await electronAPI.sessions.get(sessionId);
+        if (loadedSession) {
+          setSession(loadedSession);
+          // Show BrowserView for this session
+          console.log('[SessionViewWrapper] Showing BrowserView for session:', sessionId);
+          await electronAPI.sessions.showView(sessionId);
+        }
+      } catch (error) {
+        console.error("Failed to load session:", error);
+      }
+    };
+
+    loadSession();
+
+    // Listen for session updates
+    const handleSessionUpdate = (updatedSession: AgentSession) => {
+      if (updatedSession.id === sessionId) {
+        setSession(updatedSession);
+      }
+    };
+
+    if (electronAPI?.on) {
+      electronAPI.on("agent:session-updated", handleSessionUpdate);
+    }
+
+    // Cleanup: Hide BrowserView when component unmounts (navigating away from session view)
+    return () => {
+      console.log('[SessionViewWrapper] Unmounting, hiding BrowserView for session:', sessionId);
+      if (electronAPI?.sessions?.showView) {
+        electronAPI.sessions.showView(null);
+      }
+      if (electronAPI?.off) {
+        electronAPI.off("agent:session-updated", handleSessionUpdate);
+      }
+    };
+  }, [sessionId]);
+
+  const handleNavigate = async (url: string) => {
+    if (!sessionId) return;
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (!electronAPI?.sessions) return;
+    try {
+      await electronAPI.sessions.navigate(sessionId, url);
+    } catch (error) {
+      console.error("Failed to navigate:", error);
+    }
+  };
+
+  const handleSendMessage = async (content: string) => {
+    if (!sessionId) return;
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (!electronAPI?.agent) return;
+    try {
+      await electronAPI.agent.sendMessage(sessionId, content);
+    } catch (error) {
+      console.error("Failed to send message:", error);
+    }
+  };
+
+  const handleBack = () => {
+    // Hide BrowserView when navigating away from session view
+    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
+    if (electronAPI?.sessions?.showView) {
+      console.log('[SessionViewWrapper] Hiding BrowserView on back navigation');
+      electronAPI.sessions.showView(null);
+    }
+    navigate('/');
+  };
+
+  if (!session) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <div>Loading session...</div>
+      </div>
+    );
+  }
+
+  return (
+    <SessionView
+      session={session}
+      onNavigate={handleNavigate}
+      onSendMessage={handleSendMessage}
+      onBack={handleBack}
+    />
+  );
+};
+
+// Wrapper component for DebugView to access route params
+const DebugViewWrapper: React.FC = () => {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  
+  if (!sessionId) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <div className="text-red-500">No session ID provided</div>
+      </div>
+    );
+  }
+
+  return <DebugView />;
+};
 
 const App: React.FC = () => {
   const [sessions, setSessions] = useState<AgentSession[]>([]);
@@ -140,50 +259,13 @@ const App: React.FC = () => {
     };
   }, [selectedSessionId]);
 
-  // Load selected session details and show BrowserView
-  useEffect(() => {
-    const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
-    if (!electronAPI?.sessions) return;
+  // Note: BrowserView visibility is now managed by route components:
+  // - SessionList: Hides BrowserView on mount
+  // - SessionViewWrapper: Shows BrowserView on mount, hides on unmount
+  // - ChunksPage: Hides BrowserView on mount
 
-    const loadSession = async () => {
-      if (selectedSessionId) {
-        try {
-          const session = await electronAPI.sessions.get(selectedSessionId);
-          if (session) {
-            setSelectedSession(session);
-            // Show the BrowserView for this session
-            await electronAPI.sessions.showView(selectedSessionId);
-
-            // Give React a moment to render, then trigger bounds update
-            // This ensures the SessionView component has mounted and measured its div
-            setTimeout(() => {
-              // The ResizeObserver in SessionView will handle the bounds update
-              // But we can also trigger it manually here as a fallback
-              const viewportElement = document.querySelector(
-                "[data-browser-viewport]"
-              ) as HTMLElement;
-              if (viewportElement) {
-                const rect = viewportElement.getBoundingClientRect();
-                electronAPI.sessions.updateViewBounds(selectedSessionId, {
-                  x: Math.round(rect.left),
-                  y: Math.round(rect.top),
-                  width: Math.round(rect.width),
-                  height: Math.round(rect.height),
-                });
-              }
-            }, 100);
-          }
-        } catch (error) {
-          console.error("Failed to load session:", error);
-        }
-      } else {
-        // Hide all BrowserViews when no session is selected
-        await electronAPI.sessions.showView(null);
-        setSelectedSession(null);
-      }
-    };
-    loadSession();
-  }, [selectedSessionId]);
+  // Note: Route changes are handled by React Router
+  // BrowserView visibility is managed by individual route components
 
   const handleCreateSession = async () => {
     const electronAPI = (window as any).electronAPI as ElectronAPIWithSessions;
@@ -203,6 +285,8 @@ const App: React.FC = () => {
         }
         return [...prev, session];
       });
+      // Navigate to session page
+      window.history.pushState({}, '', `/session/${session.id}`);
     } catch (error) {
       console.error("Failed to create session:", error);
     }
@@ -210,6 +294,7 @@ const App: React.FC = () => {
 
   const handleSelectSession = (sessionId: string) => {
     setSelectedSessionId(sessionId);
+    // Navigate will be handled by React Router
   };
 
   const handleBackToSessions = async () => {
@@ -268,33 +353,33 @@ const App: React.FC = () => {
   });
 
   return (
-    <div
-      className="h-screen w-screen overflow-hidden bg-white"
-      style={{
-        height: "100vh",
-        width: "100vw",
-        margin: 0,
-        padding: 0,
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      {selectedSession && selectedSessionId ? (
-        <SessionView
-          session={selectedSession}
-          onNavigate={handleNavigate}
-          onSendMessage={handleSendMessage}
-          onBack={handleBackToSessions}
+    <BrowserRouter>
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <SessionList
+              sessions={sessions}
+              onCreateSession={handleCreateSession}
+              onSelectSession={handleSelectSession}
+              onRefresh={handleRefreshSessions}
+            />
+          }
         />
-      ) : (
-        <SessionList
-          sessions={sessions}
-          onCreateSession={handleCreateSession}
-          onSelectSession={handleSelectSession}
-          onRefresh={handleRefreshSessions}
+        <Route
+          path="/session/:sessionId"
+          element={<SessionViewWrapper />}
         />
-      )}
-    </div>
+        <Route
+          path="/session/:sessionId/debug"
+          element={<DebugViewWrapper />}
+        />
+        <Route
+          path="/session/:sessionId/chunks"
+          element={<ChunksPage />}
+        />
+      </Routes>
+    </BrowserRouter>
   );
 };
 

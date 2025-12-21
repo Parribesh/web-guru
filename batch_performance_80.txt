@@ -1,0 +1,5 @@
+Batch Size: 80 (Parallel Processing)
+Chunk Count: 4288
+Total Time: 54.304s
+Embedding Time: 52.977s
+Throughput: N/A chunks/sec

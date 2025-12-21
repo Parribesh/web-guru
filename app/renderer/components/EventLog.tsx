@@ -26,9 +26,10 @@ export interface LogEvent {
 interface EventLogProps {
   isOpen: boolean;
   onToggle: () => void;
+  fullPage?: boolean; // If true, renders in full-page mode instead of fixed overlay
 }
 
-export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
+export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle, fullPage = false }) => {
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [filter, setFilter] = useState<LogLevel | 'all'>('all');
   const [autoScroll, setAutoScroll] = useState(true);
@@ -188,7 +189,7 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
     }
   };
 
-  if (!isOpen) {
+  if (!isOpen && !fullPage) {
     return (
       <button
         onClick={onToggle}
@@ -199,6 +200,111 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
     );
   }
 
+  // Full page mode for DebugView
+  if (fullPage) {
+    return (
+      <div className="h-full flex flex-col bg-white">
+      {/* Header */}
+      <div className="flex items-center justify-between p-3 bg-gray-100 dark:bg-gray-700 border-b border-gray-300 dark:border-gray-600">
+        <h3 className="font-semibold text-gray-900 dark:text-gray-100">Event Log</h3>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-1">
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onChange={(e) => setAutoScroll(e.target.checked)}
+              className="w-3 h-3"
+            />
+            Auto-scroll
+          </label>
+          <button
+            onClick={handleClear}
+            className="text-xs px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="flex gap-1 p-2 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
+        {(['all', LogLevel.INFO, LogLevel.SUCCESS, LogLevel.WARNING, LogLevel.ERROR] as const).map(level => (
+          <button
+            key={level}
+            onClick={() => setFilter(level)}
+            className={`text-xs px-2 py-1 rounded ${
+              filter === level
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+            }`}
+          >
+            {level === 'all' ? 'All' : level.toUpperCase()}
+          </button>
+        ))}
+      </div>
+
+      {/* Events List */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto p-2 space-y-1"
+      >
+        {filteredEvents.length === 0 ? (
+          <div className="text-center text-gray-500 dark:text-gray-400 py-8">
+            No events to display
+          </div>
+        ) : (
+          filteredEvents.map(event => (
+            <div
+              key={event.id}
+              className={`p-2 rounded border text-xs ${getLevelColor(event.level)}`}
+            >
+              <div className="flex items-start justify-between mb-1">
+                <div className="flex items-center gap-2 flex-1">
+                  <span>{getLevelIcon(event.level)}</span>
+                  <span className="font-semibold">{event.category}</span>
+                  {event.progress && (
+                    <span className="text-xs opacity-75">
+                      ({event.progress.current}/{event.progress.total} - {event.progress.percentage ?? Math.round((event.progress.current / event.progress.total) * 100)}%)
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs opacity-75">{formatTime(event.timestamp)}</span>
+              </div>
+              {event.progress && (
+                <div className="mb-2">
+                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-blue-500 h-2 rounded-full transition-all duration-300 ease-out"
+                      style={{
+                        width: `${event.progress.percentage ?? Math.round((event.progress.current / event.progress.total) * 100)}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="text-sm">{event.message}</div>
+              {event.details && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-xs opacity-75">Details</summary>
+                  <pre className="mt-1 text-xs overflow-x-auto bg-black bg-opacity-10 p-1 rounded">
+                    {typeof event.details === 'string' ? event.details : JSON.stringify(event.details, null, 2)}
+                  </pre>
+                </details>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="p-2 bg-gray-100 dark:bg-gray-700 border-t border-gray-300 dark:border-gray-600 text-xs text-gray-600 dark:text-gray-400">
+        {filteredEvents.length} event{filteredEvents.length !== 1 ? 's' : ''}
+      </div>
+      </div>
+    );
+  }
+
+  // Fixed overlay mode (original behavior)
   return (
     <div className="fixed bottom-0 right-0 w-96 h-96 bg-white dark:bg-gray-800 border-t border-l border-gray-300 dark:border-gray-600 shadow-2xl z-50 flex flex-col">
       {/* Header */}
@@ -262,17 +368,29 @@ export const EventLog: React.FC<EventLogProps> = ({ isOpen, onToggle }) => {
               className={`p-2 rounded border text-xs ${getLevelColor(event.level)}`}
             >
               <div className="flex items-start justify-between mb-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-1">
                   <span>{getLevelIcon(event.level)}</span>
                   <span className="font-semibold">{event.category}</span>
                   {event.progress && (
                     <span className="text-xs opacity-75">
-                      ({event.progress.current}/{event.progress.total} - {event.progress.percentage}%)
+                      ({event.progress.current}/{event.progress.total} - {event.progress.percentage ?? Math.round((event.progress.current / event.progress.total) * 100)}%)
                     </span>
                   )}
                 </div>
                 <span className="text-xs opacity-75">{formatTime(event.timestamp)}</span>
               </div>
+              {event.progress && (
+                <div className="mb-2">
+                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-blue-500 h-2 rounded-full transition-all duration-300 ease-out"
+                      style={{
+                        width: `${event.progress.percentage ?? Math.round((event.progress.current / event.progress.total) * 100)}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
               <div className="text-sm">{event.message}</div>
               {event.details && (
                 <details className="mt-1">

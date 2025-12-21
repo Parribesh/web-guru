@@ -1,7 +1,8 @@
 // Content Cache Management
 
-import { ContentChunk, PageContent } from '../../../shared/types';
+import { ContentChunk, PageContent, DOMComponent } from '../../../shared/types';
 import { chunkContent, extractStructure } from './chunking';
+import { extractComponents } from './components';
 import { eventLogger } from '../../logging/event-logger';
 
 // Lazy import embeddings to avoid ES module issues at startup
@@ -18,11 +19,15 @@ export interface TabCache {
   pageContent: PageContent;
   chunks: ContentChunk[];
   chunkEmbeddings: Map<string, number[]>;
+  components: DOMComponent[]; // Extracted DOM components
   cachedAt: number;
 }
 
 const tabCache = new Map<string, TabCache>();
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+
+// Track ongoing cache operations to prevent duplicate processing
+const ongoingCacheOps = new Map<string, Promise<void>>();
 
 export async function cachePageContent(
   tabId: string,
@@ -31,65 +36,147 @@ export async function cachePageContent(
   url: string,
   title: string
 ): Promise<void> {
+  // Create a unique key for this cache operation (tabId + url to handle navigation)
+  const cacheKey = `${tabId}:${url}`;
+  
+  // Check if there's already an ongoing cache operation for this tab+url
+  const existingOp = ongoingCacheOps.get(cacheKey);
+  if (existingOp) {
+    eventLogger.info('RAG Cache', `Cache operation already in progress for tab ${tabId}: ${url}, waiting for completion...`);
+    await existingOp;
+    return;
+  }
+  
+  // Check if we already have cached content for this URL (within TTL)
+  const existingCache = tabCache.get(cacheKey);
+  if (existingCache && (Date.now() - existingCache.cachedAt) < CACHE_TTL) {
+    eventLogger.info('RAG Cache', `Content already cached for tab ${tabId}: ${url} (cached ${Math.round((Date.now() - existingCache.cachedAt) / 1000)}s ago)`);
+    return;
+  }
+  
   const startTime = Date.now();
   eventLogger.info('RAG Cache', `Caching page content for tab ${tabId}: ${title}`);
   eventLogger.info('RAG Cache', `URL: ${url}`);
-
-  // Extract structure
-  eventLogger.info('RAG Cache', 'Extracting page structure...');
-  const structure = extractStructure(htmlContent, extractedText);
-  eventLogger.success('RAG Cache', `Extracted ${structure.sections.length} sections`);
-
-  // Create page content object
-  const pageContent: PageContent = {
-    url,
-    title,
-    extractedText,
-    structure,
-    metadata: {
-      extractedAt: Date.now(),
-      wordCount: extractedText.split(/\s+/).length,
-    },
-  };
-
-  eventLogger.info('RAG Cache', `Page has ${pageContent.metadata.wordCount} words`);
-
-  // Chunk the content
-  eventLogger.info('RAG Cache', 'Chunking page content...');
-  const chunks = chunkContent(pageContent);
-  eventLogger.success('RAG Cache', `Created ${chunks.length} content chunks`);
   
-  // Log summary of chunks
-  const chunksWithContent = chunks.filter(c => c.content && c.content.trim().length > 0);
-  const chunksWithoutContent = chunks.length - chunksWithContent.length;
-  if (chunksWithoutContent > 0) {
-    eventLogger.warning('RAG Cache', `${chunksWithoutContent} chunks have no content!`);
-  }
-  eventLogger.info('RAG Cache', `Chunks with content: ${chunksWithContent.length}/${chunks.length}`);
+  // Create the cache operation promise
+  const cacheOp = (async () => {
+    try {
+
+      // Extract structure
+      eventLogger.info('RAG Cache', 'Extracting page structure...');
+      const structure = extractStructure(htmlContent, extractedText);
+      eventLogger.success('RAG Cache', `Extracted ${structure.sections.length} sections`);
+
+      // Extract components
+      eventLogger.info('RAG Cache', 'Extracting DOM components...');
+      const components = extractComponents(htmlContent, extractedText);
+      eventLogger.success('RAG Cache', `Extracted ${components.length} components`);
+
+      // Create page content object
+      const pageContent: PageContent = {
+        url,
+        title,
+        extractedText,
+        structure,
+        metadata: {
+          extractedAt: Date.now(),
+          wordCount: extractedText.split(/\s+/).length,
+        },
+      };
+
+      eventLogger.info('RAG Cache', `Page has ${pageContent.metadata.wordCount} words`);
+
+      // Chunk the content (with components for component-aware chunking)
+      // Make chunking async and emit progress events to avoid blocking the main thread
+      eventLogger.info('RAG Cache', 'Chunking page content...');
+      eventLogger.progress('RAG Cache', 'Starting chunking process...', 0, 100);
+      
+      // Process chunking in async batches to avoid blocking
+      // Use setImmediate to yield control back to the event loop
+      const chunks = await new Promise<ContentChunk[]>((resolve) => {
+        setImmediate(() => {
+          try {
+            const chunks = chunkContent(pageContent, components);
+            eventLogger.progress('RAG Cache', `Created ${chunks.length} chunks`, 50, 100);
+            resolve(chunks);
+          } catch (error) {
+            eventLogger.error('RAG Cache', 'Chunking failed', error instanceof Error ? error.message : String(error));
+            resolve([]);
+          }
+        });
+      });
+      
+      eventLogger.success('RAG Cache', `Created ${chunks.length} content chunks (${chunks.filter(c => c.componentType !== 'text').length} component chunks)`);
+      
+      // Log summary of chunks
+      const chunksWithContent = chunks.filter(c => c.content && c.content.trim().length > 0);
+      const chunksWithoutContent = chunks.length - chunksWithContent.length;
+      if (chunksWithoutContent > 0) {
+        eventLogger.warning('RAG Cache', `${chunksWithoutContent} chunks have no content!`);
+      }
+      eventLogger.info('RAG Cache', `Chunks with content: ${chunksWithContent.length}/${chunks.length}`);
+      
+      // Log first few chunks for debugging
+      chunks.slice(0, 3).forEach((chunk, idx) => {
+        const preview = chunk.content ? chunk.content.substring(0, 100).replace(/\n/g, ' ') : 'NO CONTENT';
+        eventLogger.debug('RAG Cache', `Chunk ${idx + 1}: "${chunk.metadata.heading || 'No heading'}" - ${chunk.content?.length || 0} chars - "${preview}..."`);
+      });
+
+      // Generate embeddings (lazy load module) with progress events
+      eventLogger.info('RAG Cache', `Generating embeddings for ${chunks.length} chunks...`);
+      eventLogger.info('RAG Cache', 'This may take a moment...');
+      eventLogger.progress('RAG Cache', 'Starting embedding generation...', 50, 100);
+      
+      const embeddingsModule = await getEmbeddingsModule();
+      
+      // Generate embeddings with progress callback
+      // Use setImmediate to yield control periodically during embedding generation
+      const chunkEmbeddings = await new Promise<Map<string, number[]>>((resolve, reject) => {
+        // Start embedding generation in next tick to avoid blocking
+        setImmediate(async () => {
+          try {
+            const embeddings = await embeddingsModule.generateChunkEmbeddings(chunks, (progress: { current: number; total: number }) => {
+              const percentage = Math.round((progress.current / progress.total) * 50) + 50; // 50-100% range
+              // Emit progress event immediately for EmbeddingProgress component
+              // Use setImmediate to ensure event is processed even during heavy CPU work
+              setImmediate(() => {
+                eventLogger.progress('RAG Cache', `Generating embeddings: ${progress.current}/${progress.total}`, percentage, 100);
+              });
+            });
+            resolve(embeddings);
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+
+      // Cache everything using tabId as key (for retrieval), but cacheKey is used for deduplication
+      tabCache.set(tabId, {
+        pageContent,
+        chunks,
+        chunkEmbeddings,
+        components,
+        cachedAt: Date.now(),
+      });
+
+      const processingTime = Date.now() - startTime;
+      eventLogger.success('RAG Cache', `Cached ${chunks.length} chunks with embeddings for tab ${tabId} in ${processingTime}ms`);
+      eventLogger.info('RAG Cache', `Embeddings ready for semantic search on this page`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      eventLogger.error('RAG Cache', `Failed to cache page content for tab ${tabId}: ${errorMessage}`);
+      throw error;
+    } finally {
+      // Remove from ongoing operations
+      ongoingCacheOps.delete(cacheKey);
+    }
+  })();
   
-  // Log first few chunks for debugging
-  chunks.slice(0, 3).forEach((chunk, idx) => {
-    const preview = chunk.content ? chunk.content.substring(0, 100).replace(/\n/g, ' ') : 'NO CONTENT';
-    eventLogger.debug('RAG Cache', `Chunk ${idx + 1}: "${chunk.metadata.heading || 'No heading'}" - ${chunk.content?.length || 0} chars - "${preview}..."`);
-  });
-
-  // Generate embeddings (lazy load module)
-  eventLogger.info('RAG Cache', `Generating embeddings for ${chunks.length} chunks...`);
-  eventLogger.info('RAG Cache', 'This may take a moment...');
-  const embeddings = await getEmbeddingsModule();
-  const chunkEmbeddings = await embeddings.generateChunkEmbeddings(chunks);
-
-  // Cache everything
-  tabCache.set(tabId, {
-    pageContent,
-    chunks,
-    chunkEmbeddings,
-    cachedAt: Date.now(),
-  });
-
-  const processingTime = Date.now() - startTime;
-  eventLogger.success('RAG Cache', `Cached ${chunks.length} chunks with embeddings for tab ${tabId} in ${processingTime}ms`);
-  eventLogger.info('RAG Cache', `Embeddings ready for semantic search on this page`);
+  // Store the operation promise
+  ongoingCacheOps.set(cacheKey, cacheOp);
+  
+  // Wait for completion
+  await cacheOp;
 }
 
 export function getCachedContent(tabId: string): TabCache | null {

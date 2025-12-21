@@ -103,7 +103,9 @@ export class TabManager {
     );
     this.views.set(tabId, view);
 
-    // Add view to window but hide it initially (will be shown when session is active)
+    // Add view to window but keep it hidden by default
+    // BrowserViews are created hidden and will only be shown when explicitly requested
+    // via session:show-view IPC call (typically from SessionViewWrapper component)
     this.mainWindow.addBrowserView(view);
     // Hide the view by setting bounds outside the window
     view.setBounds({ x: -10000, y: -10000, width: 0, height: 0 });

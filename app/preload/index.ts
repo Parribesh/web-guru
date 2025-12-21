@@ -64,6 +64,7 @@ const IPCChannels = {
     navigate: 'session:navigate',
     showView: 'session:show-view',
     updateBounds: 'session:update-bounds',
+    getChunks: 'session:get-chunks',
   },
   agent: {
     sendMessage: 'agent:send-message',
@@ -161,6 +162,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPCChannels.session.updateBounds, sessionId, bounds),
     getTabId: (sessionId: string) =>
       ipcRenderer.invoke(IPCChannels.session.getTabId, sessionId),
+    getChunks: (sessionId: string) =>
+      ipcRenderer.invoke(IPCChannels.session.getChunks, sessionId),
   },
 
   // Agent Operations
@@ -417,7 +420,25 @@ function extractPageContent(): string {
 // Auto-extract content when page loads (for AI analysis)
 // Only extract from actual web pages, not internal/UI pages
 if (typeof window !== 'undefined') {
+  let isExtracting = false;
+  let lastExtractedUrl: string | null = null;
+  
   const extractAndSendContent = async () => {
+    const currentUrl = window.location.href;
+    
+    // Prevent duplicate extractions
+    if (isExtracting) {
+      console.log('[Preload] Extraction already in progress, skipping...');
+      return;
+    }
+    
+    // Prevent duplicate extractions for the same URL
+    if (lastExtractedUrl === currentUrl) {
+      console.log('[Preload] Content already extracted for this URL, skipping...');
+      return;
+    }
+    
+    isExtracting = true;
     try {
       const url = window.location.href.toLowerCase();
       
@@ -471,8 +492,11 @@ if (typeof window !== 'undefined') {
         title: pageInfo.title,
       });
       console.log(`[Preload] DOM content sent successfully`);
+      lastExtractedUrl = currentUrl;
     } catch (error) {
       console.error("Failed to extract DOM content:", error);
+    } finally {
+      isExtracting = false;
     }
   };
   

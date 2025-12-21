@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 // Helper function to get test booking URL
 async function getTestBookingUrl(): Promise<string> {
@@ -43,7 +44,11 @@ export const SessionList: React.FC<SessionListProps> = ({
   onSelectSession,
   onRefresh
 }) => {
+  const navigate = useNavigate();
   console.log('SessionList render:', { sessionsCount: sessions.length, sessions: sessions.map(s => ({ id: s.id, title: s.title })) });
+  
+  // BrowserViews are hidden by default - no need to hide them here
+  // They will only be shown when SessionViewWrapper explicitly calls showView(sessionId)
   
   return (
     <div className="flex flex-col h-screen w-screen bg-gradient-to-br from-gray-50 to-gray-100" style={{ minHeight: '100vh', minWidth: '100vw' }}>
@@ -143,7 +148,10 @@ export const SessionList: React.FC<SessionListProps> = ({
             {sessions.map((session) => (
               <div
                 key={session.id}
-                onClick={() => onSelectSession(session.id)}
+                  onClick={() => {
+                    onSelectSession(session.id);
+                    navigate(`/session/${session.id}`);
+                  }}
                 className="bg-white rounded-xl border-2 border-gray-200 p-5 hover:border-blue-500 hover:shadow-lg transition-all cursor-pointer transform hover:scale-[1.02]"
               >
                 <div className="flex items-start justify-between">

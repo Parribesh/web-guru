@@ -3,6 +3,7 @@
 import { ipcMain } from 'electron';
 import { SessionManager } from '../../session/SessionManager';
 import { IPCChannels, Tab } from '../../../shared/types';
+import { getCachedContent } from '../../agent/rag/cache';
 
 export function setupSessionHandlers(sessionManager: SessionManager): void {
   console.log('[SessionHandlers] Setting up session IPC handlers...');
@@ -156,6 +157,27 @@ export function setupSessionHandlers(sessionManager: SessionManager): void {
       }
     }
     return { success: false };
+  });
+
+  // Get chunks for a session
+  ipcMain.handle(IPCChannels.session.getChunks, async (event, sessionId: string) => {
+    const tabId = sessionManager.getTabId(sessionId);
+    if (!tabId) {
+      return { success: false, error: 'Session not found', chunks: null };
+    }
+
+    const cache = getCachedContent(tabId);
+    if (!cache) {
+      return { success: false, error: 'No cached content for this session', chunks: null };
+    }
+
+    // Return chunks with components
+    return {
+      success: true,
+      chunks: cache.chunks,
+      components: cache.components,
+      pageContent: cache.pageContent,
+    };
   });
 }
 
