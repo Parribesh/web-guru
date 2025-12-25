@@ -3,6 +3,7 @@
 import * as net from 'net';
 import { BrowserWindow } from 'electron';
 import { getSessionManager } from '../ipc';
+import { getEmbeddingService } from '../agent/rag/embedding-service';
 
 const CLI_PORT = 9876;
 
@@ -85,6 +86,57 @@ export function setupCLIServer(
                     }
                   }
                 }
+              }
+            } else if (command.type === 'get-chunks') {
+              const sessionManager = getSessionManager();
+              if (!sessionManager) {
+                response = { success: false, error: 'SessionManager not available' };
+              } else {
+                const tabId = sessionManager.getTabId(command.sessionId);
+                if (!tabId) {
+                  response = { success: false, error: `Session not found: ${command.sessionId}` };
+                } else {
+                  const { getCachedContent } = require('../agent/rag/cache');
+                  const cache = getCachedContent(tabId);
+                  if (!cache) {
+                    response = { success: false, error: 'No cached content yet - page may still be loading' };
+                  } else {
+                    const totalChunks = cache.chunks.length;
+                    const componentChunks = cache.chunks.filter((c: any) => c.componentType && c.componentType !== 'text' && c.componentType !== 'section').length;
+                    const nestedChunks = cache.chunks.reduce((sum: number, c: any) => sum + (c.nestedChunks?.length || 0), 0);
+                    const totalWithNested = totalChunks + nestedChunks;
+                    
+                    response = {
+                      success: true,
+                      data: `Chunks for session ${command.sessionId}:\n` +
+                            `  Total chunks: ${totalChunks}\n` +
+                            `  Component chunks: ${componentChunks}\n` +
+                            `  Nested chunks: ${nestedChunks}\n` +
+                            `  Total (including nested): ${totalWithNested}\n` +
+                            `  Components extracted: ${cache.components.length}`,
+                    };
+                  }
+                }
+              }
+            } else if (command.type === 'embedding-service-status') {
+              try {
+                const service = getEmbeddingService();
+                const isAvailable = await service.healthCheck();
+                const socketConnected = (service as any).socket && (service as any).socket.readyState === 1;
+                
+                let output = `\n📊 Embedding Service Status\n`;
+                output += `${'='.repeat(60)}\n\n`;
+                output += `Service URL: ${service.baseUrl || 'http://localhost:8000'}\n`;
+                output += `Status: ${isAvailable ? '✅ Available' : '❌ Unavailable'}\n`;
+                output += `Pending Tasks: ${service.pendingTasks ? service.pendingTasks.size : 0}\n`;
+                output += `Socket Connected: ${socketConnected ? '✅ Yes' : '❌ No'}\n`;
+                
+                response = {
+                  success: true,
+                  data: output,
+                };
+              } catch (error: any) {
+                response = { success: false, error: error.message || 'Failed to get embedding service status' };
               }
             } else {
               response = { success: false, error: `Unknown command type: ${command.type}` };

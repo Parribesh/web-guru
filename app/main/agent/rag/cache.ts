@@ -4,6 +4,8 @@ import { ContentChunk, PageContent, DOMComponent } from '../../../shared/types';
 import { chunkContent, extractStructure } from './chunking';
 import { extractComponents } from './components';
 import { eventLogger } from '../../logging/event-logger';
+// Persistent session storage disabled - only using in-memory cache for testing
+// import { findSessionByUrl, saveSessionData } from './session-storage';
 
 // Lazy import embeddings to avoid ES module issues at startup
 let embeddingsModule: any = null;
@@ -34,7 +36,8 @@ export async function cachePageContent(
   extractedText: string,
   htmlContent: string,
   url: string,
-  title: string
+  title: string,
+  sessionId?: string
 ): Promise<void> {
   // Create a unique key for this cache operation (tabId + url to handle navigation)
   const cacheKey = `${tabId}:${url}`;
@@ -47,12 +50,18 @@ export async function cachePageContent(
     return;
   }
   
-  // Check if we already have cached content for this URL (within TTL)
+  // Check if we already have cached content for this URL (within TTL) - in-memory only
+  // NOTE: Persistent session caching is disabled to allow testing of HTTP embedding service
   const existingCache = tabCache.get(cacheKey);
   if (existingCache && (Date.now() - existingCache.cachedAt) < CACHE_TTL) {
+    console.log(`[RAG Cache] Content already cached in memory for tab ${tabId}: ${url} (cached ${Math.round((Date.now() - existingCache.cachedAt) / 1000)}s ago)`);
     eventLogger.info('RAG Cache', `Content already cached for tab ${tabId}: ${url} (cached ${Math.round((Date.now() - existingCache.cachedAt) / 1000)}s ago)`);
     return;
   }
+  
+  // Persistent session caching disabled - always generate fresh embeddings
+  // This allows testing of HTTP embedding service
+  console.log(`[RAG Cache] No cached content found, will generate fresh embeddings`);
   
   const startTime = Date.now();
   eventLogger.info('RAG Cache', `Caching page content for tab ${tabId}: ${title}`);
@@ -123,11 +132,13 @@ export async function cachePageContent(
       });
 
       // Generate embeddings (lazy load module) with progress events
+      console.log(`[RAG Cache] Generating embeddings for ${chunks.length} chunks...`);
       eventLogger.info('RAG Cache', `Generating embeddings for ${chunks.length} chunks...`);
       eventLogger.info('RAG Cache', 'This may take a moment...');
       eventLogger.progress('RAG Cache', 'Starting embedding generation...', 50, 100);
       
       const embeddingsModule = await getEmbeddingsModule();
+      console.log(`[RAG Cache] Embeddings module loaded, calling generateChunkEmbeddings...`);
       
       // Generate embeddings with progress callback
       // Use setImmediate to yield control periodically during embedding generation
@@ -135,6 +146,7 @@ export async function cachePageContent(
         // Start embedding generation in next tick to avoid blocking
         setImmediate(async () => {
           try {
+            console.log(`[RAG Cache] Starting embedding generation for ${chunks.length} chunks`);
             const embeddings = await embeddingsModule.generateChunkEmbeddings(chunks, (progress: { current: number; total: number }) => {
               const percentage = Math.round((progress.current / progress.total) * 50) + 50; // 50-100% range
               // Emit progress event immediately for EmbeddingProgress component
@@ -143,8 +155,10 @@ export async function cachePageContent(
                 eventLogger.progress('RAG Cache', `Generating embeddings: ${progress.current}/${progress.total}`, percentage, 100);
               });
             });
+            console.log(`[RAG Cache] Embedding generation completed: ${embeddings.size} embeddings generated`);
             resolve(embeddings);
           } catch (error) {
+            console.error(`[RAG Cache] Embedding generation failed:`, error);
             reject(error);
           }
         });
@@ -158,6 +172,10 @@ export async function cachePageContent(
         components,
         cachedAt: Date.now(),
       });
+
+      // Persistent session storage disabled - only using in-memory cache
+      // This allows testing of HTTP embedding service without reusing old cached embeddings
+      console.log(`[RAG Cache] Cached ${chunks.length} chunks with ${chunkEmbeddings.size} embeddings in memory (persistent storage disabled)`);
 
       const processingTime = Date.now() - startTime;
       eventLogger.success('RAG Cache', `Cached ${chunks.length} chunks with embeddings for tab ${tabId} in ${processingTime}ms`);

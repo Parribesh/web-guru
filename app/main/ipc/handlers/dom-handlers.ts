@@ -5,6 +5,7 @@ import { IPCChannels } from '../../../shared/types';
 import { TabManager } from '../../tabs';
 import { cachePageContent } from '../../agent/rag/cache';
 import { eventLogger } from '../../logging/event-logger';
+import { getSessionManager } from '../index';
 
 export function setupDOMHandlers(tabManager: TabManager): void {
   ipcMain.handle(IPCChannels.dom.content, async (event, data: {
@@ -58,12 +59,21 @@ export function setupDOMHandlers(tabManager: TabManager): void {
     // Use setImmediate to make this async and not block the IPC handler
     setImmediate(async () => {
       try {
+        // Try to get sessionId for this tab
+        let sessionId: string | undefined;
+        const sessionManager = getSessionManager();
+        if (sessionManager) {
+          const foundSessionId = sessionManager.getSessionIdByTabId(actualTabId);
+          sessionId = foundSessionId || undefined;
+        }
+        
         await cachePageContent(
           actualTabId,
           data.content,
           data.htmlContent || '',
           data.url,
-          data.title
+          data.title,
+          sessionId
         );
         console.log(`✅ Cached page content for tab ${actualTabId}`);
         eventLogger.success('QA Service', `Successfully cached page content for tab ${actualTabId}`);

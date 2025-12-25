@@ -3,8 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { EventLog } from '../components/EventLog';
 import { ChunksViewer } from '../components/ChunksViewer';
 import { NavigationBar } from '../components/NavigationBar';
+import { QueueMonitor } from '../components/QueueMonitor';
+import { EmbeddingStats } from '../components/EmbeddingStats';
+import { WebSocketMonitor } from '../components/WebSocketMonitor';
+import { TaskMonitor } from '../components/TaskMonitor';
 
-type DebugTab = 'event-log' | 'chunks';
+type DebugTab = 'event-log' | 'chunks' | 'queue-monitor' | 'embedding-stats' | 'websocket-monitor' | 'task-monitor';
 
 export const DebugView: React.FC = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -72,6 +76,58 @@ export const DebugView: React.FC = () => {
                 <span>Chunks Viewer</span>
               </div>
             </button>
+            <button
+              onClick={() => setActiveTab('queue-monitor')}
+              className={`w-full text-left px-4 py-3 text-sm font-medium rounded-lg transition-colors ${
+                activeTab === 'queue-monitor'
+                  ? 'bg-blue-600 text-white shadow-md'
+                  : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span>📊</span>
+                <span>Queue Monitor</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setActiveTab('embedding-stats')}
+              className={`w-full text-left px-4 py-3 text-sm font-medium rounded-lg transition-colors ${
+                activeTab === 'embedding-stats'
+                  ? 'bg-blue-600 text-white shadow-md'
+                  : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span>📈</span>
+                <span>Embedding Stats</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setActiveTab('websocket-monitor')}
+              className={`w-full text-left px-4 py-3 text-sm font-medium rounded-lg transition-colors ${
+                activeTab === 'websocket-monitor'
+                  ? 'bg-blue-600 text-white shadow-md'
+                  : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span>🔌</span>
+                <span>WebSocket Monitor</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setActiveTab('task-monitor')}
+              className={`w-full text-left px-4 py-3 text-sm font-medium rounded-lg transition-colors ${
+                activeTab === 'task-monitor'
+                  ? 'bg-blue-600 text-white shadow-md'
+                  : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span>⚡</span>
+                <span>Task Monitor</span>
+              </div>
+            </button>
           </nav>
         </div>
 
@@ -85,6 +141,26 @@ export const DebugView: React.FC = () => {
           {activeTab === 'chunks' && (
             <div className="h-full">
               <ChunksViewer sessionId={sessionId} />
+            </div>
+          )}
+          {activeTab === 'queue-monitor' && (
+            <div className="h-full">
+              <QueueMonitor />
+            </div>
+          )}
+          {activeTab === 'embedding-stats' && (
+            <div className="h-full">
+              <EmbeddingStats />
+            </div>
+          )}
+          {activeTab === 'websocket-monitor' && (
+            <div className="h-full">
+              <WebSocketMonitor />
+            </div>
+          )}
+          {activeTab === 'task-monitor' && (
+            <div className="h-full">
+              <TaskMonitor />
             </div>
           )}
         </div>

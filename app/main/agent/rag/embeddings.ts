@@ -1,6 +1,6 @@
 import { ContentChunk } from '../../../shared/types';
 import { eventLogger } from '../../logging/event-logger';
-import { getWorkerPool } from './worker-pool';
+import { getEmbeddingService } from './embedding-service';
 
 // Lazy load the embedding model
 let embeddingPipeline: any = null;
@@ -39,18 +39,52 @@ export async function initializeEmbeddings(): Promise<void> {
       const transformers = await loadTransformers();
       eventLogger.info('Embeddings', 'Loading transformers module...');
       
-      // Set environment - allow remote models for first-time download
+      // Configure transformers environment for optimal caching
+      const path = await import('path');
+      const os = await import('os');
+      const fs = await import('fs');
+      
       if (transformers.env) {
         transformers.env.allowLocalModels = true;
         transformers.env.allowRemoteModels = true; // Allow downloading models
         transformers.env.remotePath = transformers.env.remotePath || 'https://huggingface.co';
+        
+        // transformers.js automatically caches models in ~/.cache/huggingface/transformers
+        // We ensure this directory exists and log cache status
+        const defaultCacheDir = path.join(os.homedir(), '.cache', 'huggingface', 'transformers');
+        const cacheDir = process.env.TRANSFORMERS_CACHE || defaultCacheDir;
+        
+        // Ensure cache directory exists (transformers.js will create it, but we ensure it's ready)
+        try {
+          if (!fs.existsSync(cacheDir)) {
+            fs.mkdirSync(cacheDir, { recursive: true });
+            eventLogger.info('Embeddings', `Created transformers cache directory: ${cacheDir}`);
+          }
+        } catch (err: any) {
+          eventLogger.warning('Embeddings', `Could not create cache directory ${cacheDir}: ${err.message}`);
+        }
+        
+        // Note: transformers.js automatically uses this cache directory
+        // Models are cached after first download and reused automatically
+        eventLogger.info('Embeddings', `Transformers cache directory: ${cacheDir}`);
       }
       
-      eventLogger.info('Embeddings', `Loading model: ${MODEL_NAME}...`);
-      eventLogger.info('Embeddings', 'This may take a moment on first run as the model downloads...');
+      // Check if model is already cached
+      const cacheDir = process.env.TRANSFORMERS_CACHE || 
+                      path.join(os.homedir(), '.cache', 'huggingface', 'transformers');
+      const modelCachePath = path.join(cacheDir, 'models--' + MODEL_NAME.replace('/', '--'));
+      const isCached = fs.existsSync(modelCachePath);
+      
+      if (isCached) {
+        eventLogger.info('Embeddings', `Model found in cache: ${MODEL_NAME} (loading from cache)`);
+      } else {
+        eventLogger.info('Embeddings', `Model not in cache: ${MODEL_NAME} (will download and cache)`);
+        eventLogger.info('Embeddings', 'This may take a moment on first run as the model downloads...');
+      }
       
       embeddingPipeline = await transformers.pipeline('feature-extraction', MODEL_NAME, {
-        quantized: true, // Use quantized model for faster loading
+        quantized: true, // Use quantized model for faster loading and smaller cache size
+        revision: 'main', // Use main branch for consistency
         progress_callback: (progress: any) => {
           // Log progress if available
           if (progress && progress.status === 'progress') {
@@ -61,6 +95,10 @@ export async function initializeEmbeddings(): Promise<void> {
           }
         },
       });
+      
+      if (!isCached) {
+        eventLogger.info('Embeddings', `Model cached for future use at: ${modelCachePath}`);
+      }
       eventLogger.success('Embeddings', 'Embeddings initialized successfully');
     } catch (error: any) {
       eventLogger.error('Embeddings', 'Failed to initialize embeddings', error.message || error);
@@ -187,100 +225,89 @@ export async function generateChunkEmbeddings(
   progressCallback?: (progress: { current: number; total: number }) => void
 ): Promise<Map<string, number[]>> {
   const startTime = Date.now();
-  const embeddings = new Map<string, number[]>();
-
+  
+  console.log(`[Embeddings] Starting embedding generation for ${chunks.length} chunks...`);
   eventLogger.info('Embeddings', `Starting embedding generation for ${chunks.length} chunks...`);
-  eventLogger.info('Embeddings', 'This process converts text chunks into vector embeddings for semantic search');
+  eventLogger.info('Embeddings', 'This process converts text chunks into vector embeddings for semantic search via HTTP service');
 
-  // Try to use worker pool, fallback to direct processing if it fails
-  let useWorkers = false;
-  let workerPool: any = null;
-  let poolStats: any = null;
-  let workerError: Error | null = null;
-
-  try {
-    eventLogger.info('Embeddings', 'Attempting to initialize worker pool...');
-    workerPool = getWorkerPool();
-    
-    // Wait for all workers to initialize sequentially before using them
-    eventLogger.info('Embeddings', 'Waiting for worker pool initialization...');
-    await workerPool.waitForInitialization();
-    
-    poolStats = workerPool.getStats();
-    useWorkers = poolStats.total > 0;
-    if (useWorkers) {
-      eventLogger.info('Embeddings', `All ${poolStats.total} worker threads initialized and ready for parallel processing`);
-    } else {
-      eventLogger.warning('Embeddings', 'Worker pool initialized but no workers available');
-    }
-  } catch (error: any) {
-    workerError = error;
-    eventLogger.error('Embeddings', `Worker pool initialization failed: ${error.message}`);
-    eventLogger.error('Embeddings', `Error stack: ${error.stack || 'No stack trace'}`);
-    eventLogger.warning('Embeddings', 'Falling back to direct processing');
-    useWorkers = false;
+  // Use HTTP-based embedding service
+  const embeddingService = getEmbeddingService();
+  const serviceBaseUrl = (embeddingService as any).baseUrl;
+  
+  // Check if service is available
+  console.log(`[Embeddings] Checking embedding service availability at ${serviceBaseUrl}...`);
+  eventLogger.info('Embeddings', `Checking embedding service availability at ${serviceBaseUrl}...`);
+  const isAvailable = await embeddingService.healthCheck();
+  console.log(`[Embeddings] Health check result: ${isAvailable}`);
+  
+  if (!isAvailable) {
+    console.warn(`[Embeddings] HTTP embedding service not available, falling back to direct processing`);
+    eventLogger.warning('Embeddings', 'HTTP embedding service not available, falling back to direct processing');
+    eventLogger.warning('Embeddings', `Service URL was: ${serviceBaseUrl}`);
+    // Fallback to direct processing
+    return generateChunkEmbeddingsDirect(chunks, progressCallback);
   }
 
+  console.log(`[Embeddings] Service is available, submitting ${chunks.length} chunks for embedding generation`);
+  eventLogger.info('Embeddings', `Service is available, submitting ${chunks.length} chunks for embedding generation`);
+  try {
+    // Use HTTP service to generate embeddings
+    console.log(`[Embeddings] Calling embeddingService.generateEmbeddings with ${chunks.length} chunks`);
+    const embeddings = await embeddingService.generateEmbeddings(
+      chunks.map(chunk => ({ id: chunk.id, content: chunk.content })),
+      progressCallback
+    );
+    console.log(`[Embeddings] Received ${embeddings.size} embeddings from service`);
+
+    const processingTime = Date.now() - startTime;
+    const successRate = ((embeddings.size / chunks.length) * 100).toFixed(1);
+    const avgTimePerChunk = (processingTime / chunks.length).toFixed(1);
+    const chunksPerSecond = ((chunks.length / processingTime) * 1000).toFixed(1);
+    
+    eventLogger.success('Embeddings', `Generated ${embeddings.size} out of ${chunks.length} embeddings (${successRate}% success) in ${processingTime}ms`);
+    eventLogger.info('Embeddings', `Performance: ${chunksPerSecond} chunks/sec, ${avgTimePerChunk}ms avg per chunk`);
+    eventLogger.info('Embeddings', 'Embeddings are now ready for semantic similarity search');
+    
+    return embeddings;
+  } catch (error: any) {
+    eventLogger.error('Embeddings', `HTTP embedding service failed: ${error.message}`);
+    eventLogger.warning('Embeddings', 'Falling back to direct processing');
+    return generateChunkEmbeddingsDirect(chunks, progressCallback);
+  }
+}
+
+/**
+ * Fallback: Generate embeddings directly (for when HTTP service is unavailable)
+ */
+async function generateChunkEmbeddingsDirect(
+  chunks: ContentChunk[],
+  progressCallback?: (progress: { current: number; total: number }) => void
+): Promise<Map<string, number[]>> {
+  const startTime = Date.now();
+  const embeddings = new Map<string, number[]>();
   const totalChunks = chunks.length;
   let completedCount = 0;
   let failedCount = 0;
+
+  eventLogger.info('Embeddings', `Using direct processing for ${totalChunks} chunks (fallback mode)`);
   
-  // Emit initial progress event
   if (progressCallback) {
     progressCallback({ current: 0, total: totalChunks });
   }
-  
-  // Log which method we're using
-  if (useWorkers && workerPool) {
-    eventLogger.info('Embeddings', `Using ${poolStats.total} worker threads - processing all ${totalChunks} chunks in parallel`);
-  } else {
-    eventLogger.warning('Embeddings', 'Using direct processing (sequential) - workers not available');
-    if (workerError) {
-      eventLogger.error('Embeddings', `Worker error was: ${workerError.message}`);
-    }
-  }
-  
-  // Set progress callback on worker pool for batch-level progress updates
-  if (useWorkers && workerPool && progressCallback) {
-    eventLogger.debug('Embeddings', `Setting progress callback on worker pool: totalChunks=${totalChunks}`);
-    workerPool.setProgressCallback(progressCallback, totalChunks);
-  } else {
-    eventLogger.warning('Embeddings', `Not setting progress callback: useWorkers=${useWorkers}, workerPool=${!!workerPool}, progressCallback=${!!progressCallback}`);
-  }
-  
-  // Emit progress showing chunks are being queued
-  if (useWorkers && workerPool && progressCallback) {
-    // Show that we're queuing chunks
-    eventLogger.info('Embeddings', `Queuing ${totalChunks} chunks to worker pool...`);
-    progressCallback({ current: 0, total: totalChunks });
-  }
-  
-  // Process chunks - use workers if available, otherwise use direct processing
-  // All chunks start processing immediately (parallel), but workers handle the actual parallelism
-  const embeddingPromises = chunks.map(async (chunk, index) => {
+
+  const embeddingPromises = chunks.map(async (chunk) => {
     let retries = 2;
     
     while (retries > 0) {
       try {
-        let embedding: number[];
+        const embedding = await generateEmbedding(chunk.content);
+        completedCount++;
+        embeddings.set(chunk.id, embedding);
         
-        if (useWorkers && workerPool) {
-          // Use worker thread - this is truly parallel across workers
-          // Progress is now handled at batch level, not per-chunk
-          eventLogger.debug('Embeddings', `Submitting chunk ${index + 1}/${totalChunks} to worker pool`);
-          embedding = await workerPool.generateEmbedding(chunk.id, chunk.content);
-        } else {
-          // Fallback to direct processing - this is sequential CPU work
-          embedding = await generateEmbedding(chunk.content);
-          completedCount++;
-          
-          // Update progress for direct processing (no workers)
-          if (progressCallback) {
-            throttledProgressCallback(progressCallback, { current: completedCount, total: totalChunks });
-          }
+        if (progressCallback) {
+          throttledProgressCallback(progressCallback, { current: completedCount, total: totalChunks });
         }
         
-        embeddings.set(chunk.id, embedding);
         return { success: true, chunkId: chunk.id };
       } catch (error: any) {
         retries--;
@@ -299,14 +326,9 @@ export async function generateChunkEmbeddings(
     return { success: false, chunkId: chunk.id };
   });
   
-  // Wait for all embeddings to complete - all started in parallel
-  eventLogger.info('Embeddings', `Started ${embeddingPromises.length} embedding tasks in parallel`);
   await Promise.all(embeddingPromises);
   
-  // Final progress update
-  // Ensure final progress is always emitted, even if throttled
   if (progressCallback) {
-    // Clear any pending throttle
     if (progressThrottleTimeout) {
       clearTimeout(progressThrottleTimeout);
       progressThrottleTimeout = null;
@@ -316,12 +338,8 @@ export async function generateChunkEmbeddings(
 
   const processingTime = Date.now() - startTime;
   const successRate = ((embeddings.size / chunks.length) * 100).toFixed(1);
-  const avgTimePerChunk = (processingTime / chunks.length).toFixed(1);
-  const chunksPerSecond = ((chunks.length / processingTime) * 1000).toFixed(1);
   
   eventLogger.success('Embeddings', `Generated ${embeddings.size} out of ${chunks.length} embeddings (${successRate}% success) in ${processingTime}ms`);
-  eventLogger.info('Embeddings', `Performance: ${chunksPerSecond} chunks/sec, ${avgTimePerChunk}ms avg per chunk`);
-  eventLogger.info('Embeddings', 'Embeddings are now ready for semantic similarity search');
   
   if (failedCount > 0) {
     eventLogger.warning('Embeddings', `${failedCount} chunks failed to generate embeddings`);

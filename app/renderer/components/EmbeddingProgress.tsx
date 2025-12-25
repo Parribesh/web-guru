@@ -11,6 +11,12 @@ interface CurrentProgress {
   total: number;
   message: string;
   percentage: number;
+  summary?: {
+    totalChunks: number;
+    totalBatches: number;
+    totalTime: number;
+    avgBatchTime: number;
+  };
 }
 
 export const EmbeddingProgress: React.FC<EmbeddingProgressProps> = ({ tabId, tabIsLoading, tabUrl }) => {
@@ -21,6 +27,44 @@ export const EmbeddingProgress: React.FC<EmbeddingProgressProps> = ({ tabId, tab
   const completionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const previousLoadingState = useRef<boolean | undefined>(undefined);
   const previousUrl = useRef<string | undefined>(undefined);
+  
+  // Execution rate tracking
+  const [completedTasks, setCompletedTasks] = useState<Array<{ timestamp: number }>>([]);
+  const [executionRate, setExecutionRate] = useState<number>(0);
+  const rateCalculationWindow = 10000; // Calculate rate over last 10 seconds
+  const rateUpdateIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Calculate execution rate
+  useEffect(() => {
+    const updateRate = () => {
+      const now = Date.now();
+      const windowStart = now - rateCalculationWindow;
+      
+      // Filter completed tasks within the time window
+      const recentCompletions = completedTasks.filter(
+        task => task.timestamp >= windowStart
+      );
+      
+      if (recentCompletions.length > 0) {
+        // Calculate rate: completions per second
+        const timeSpan = (now - recentCompletions[0].timestamp) / 1000; // in seconds
+        const rate = timeSpan > 0 ? recentCompletions.length / timeSpan : 0;
+        setExecutionRate(rate);
+      } else {
+        setExecutionRate(0);
+      }
+    };
+
+    // Update rate every second
+    rateUpdateIntervalRef.current = setInterval(updateRate, 1000);
+    updateRate(); // Initial calculation
+
+    return () => {
+      if (rateUpdateIntervalRef.current) {
+        clearInterval(rateUpdateIntervalRef.current);
+      }
+    };
+  }, [completedTasks, rateCalculationWindow]);
 
   // Detect when page finishes loading
   useEffect(() => {
@@ -31,6 +75,8 @@ export const EmbeddingProgress: React.FC<EmbeddingProgressProps> = ({ tabId, tab
       setIsWaitingForPage(false);
       previousLoadingState.current = undefined;
       previousUrl.current = undefined;
+      setCompletedTasks([]);
+      setExecutionRate(0);
       return;
     }
 
@@ -41,6 +87,8 @@ export const EmbeddingProgress: React.FC<EmbeddingProgressProps> = ({ tabId, tab
       setIsActive(false);
       setHasStarted(false);
       setIsWaitingForPage(false);
+      setCompletedTasks([]);
+      setExecutionRate(0);
       if (completionTimeoutRef.current) {
         clearTimeout(completionTimeoutRef.current);
         completionTimeoutRef.current = null;
@@ -157,23 +205,64 @@ export const EmbeddingProgress: React.FC<EmbeddingProgressProps> = ({ tabId, tab
             const progress = event.progress;
             const percentage = progress.percentage ?? Math.round((progress.current / progress.total) * 100);
             
-            setCurrentProgress({
-              current: progress.current,
-              total: progress.total,
-              message: message,
-              percentage: percentage,
+            // Track completion when progress increases
+            setCurrentProgress(prev => {
+              if (prev && progress.current > prev.current) {
+                // Progress increased, track completion
+                setCompletedTasks(prevTasks => {
+                  const newTasks = [...prevTasks, { timestamp: Date.now() }];
+                  // Keep only tasks from last minute
+                  const oneMinuteAgo = Date.now() - 60000;
+                  return newTasks.filter(task => task.timestamp >= oneMinuteAgo);
+                });
+              }
+              return {
+                current: progress.current,
+                total: progress.total,
+                message: message,
+                percentage: percentage,
+              };
             });
+            
+            // Extract summary information from completion message
+            let summary = undefined;
+            if (message.includes('Completed:') && message.includes('batches')) {
+              // Parse: "Completed: X/Y chunks | Z batches | X.Xs total | X.Xs avg/batch"
+              const chunksMatch = message.match(/(\d+)\/(\d+)\s+chunks/);
+              const batchesMatch = message.match(/(\d+)\s+batches/);
+              const totalTimeMatch = message.match(/([\d.]+)s\s+total/);
+              const avgTimeMatch = message.match(/([\d.]+)s\s+avg\/batch/);
+              
+              if (chunksMatch && batchesMatch && totalTimeMatch && avgTimeMatch) {
+                summary = {
+                  totalChunks: parseInt(chunksMatch[2]),
+                  totalBatches: parseInt(batchesMatch[1]),
+                  totalTime: parseFloat(totalTimeMatch[1]) * 1000, // Convert to ms
+                  avgBatchTime: parseFloat(avgTimeMatch[1]) * 1000, // Convert to ms
+                };
+              }
+            }
+            
+            // Update progress with summary if available
+            setCurrentProgress(prev => prev ? {
+              ...prev,
+              summary: summary || prev.summary,
+            } : null);
             
             // Hide component when progress reaches 100% and we have a completion message
             if (percentage === 100 && 
                 (message.includes('Cached') || 
                  message.includes('Embeddings ready') ||
-                 message.includes('successfully'))) {
+                 message.includes('successfully') ||
+                 message.includes('Completed:'))) {
+              // Show summary for 5 seconds before hiding
               completionTimeoutRef.current = setTimeout(() => {
                 setIsActive(false);
                 setHasStarted(false);
                 setCurrentProgress(null);
-              }, 2000);
+                setCompletedTasks([]);
+                setExecutionRate(0);
+              }, 5000);
             }
           } else {
             // Even without progress, update message to show current activity
@@ -284,11 +373,18 @@ export const EmbeddingProgress: React.FC<EmbeddingProgressProps> = ({ tabId, tab
         <span className="text-xs font-semibold text-blue-900">Processing Page Content</span>
       </div>
       <div className="text-xs text-blue-800 mb-2">
-        <div className="flex items-center gap-2">
-          <span>{formatMessage(currentProgress.message)}</span>
-          <span className="text-blue-500 ml-auto">
-            {currentProgress.current}/{currentProgress.total} ({currentProgress.percentage}%)
-          </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="flex-1 min-w-0">{formatMessage(currentProgress.message)}</span>
+          <div className="flex items-center gap-3 ml-auto">
+            {executionRate > 0 && (
+              <span className="text-blue-600 font-semibold whitespace-nowrap">
+                {executionRate.toFixed(1)}/sec
+              </span>
+            )}
+            <span className="text-blue-500 whitespace-nowrap">
+              {currentProgress.current}/{currentProgress.total} ({currentProgress.percentage}%)
+            </span>
+          </div>
         </div>
       </div>
       <div className="h-1.5 bg-blue-200 rounded-full overflow-hidden">
@@ -299,6 +395,26 @@ export const EmbeddingProgress: React.FC<EmbeddingProgressProps> = ({ tabId, tab
           }}
         />
       </div>
+      {/* Summary Section - shown when complete */}
+      {currentProgress.percentage === 100 && currentProgress.summary && (
+        <div className="mt-2 pt-2 border-t border-blue-300 bg-blue-100 rounded px-2 py-1.5">
+          <div className="text-xs font-semibold text-blue-900 mb-1">Execution Summary</div>
+          <div className="grid grid-cols-2 gap-2 text-xs text-blue-800">
+            <div>
+              <span className="font-medium">Chunks:</span> {currentProgress.summary.totalChunks}
+            </div>
+            <div>
+              <span className="font-medium">Batches:</span> {currentProgress.summary.totalBatches}
+            </div>
+            <div>
+              <span className="font-medium">Total Time:</span> {(currentProgress.summary.totalTime / 1000).toFixed(2)}s
+            </div>
+            <div>
+              <span className="font-medium">Avg/Batch:</span> {(currentProgress.summary.avgBatchTime / 1000).toFixed(2)}s
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

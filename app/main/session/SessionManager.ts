@@ -70,6 +70,15 @@ export class SessionManager extends EventEmitter {
     return this.sessions.get(sessionId)?.tabId || null;
   }
 
+  getSessionIdByTabId(tabId: string): string | null {
+    for (const [sessionId, sessionData] of this.sessions.entries()) {
+      if (sessionData.tabId === tabId) {
+        return sessionId;
+      }
+    }
+    return null;
+  }
+
   getAllSessions(): AgentSession[] {
     return Array.from(this.sessions.values())
       .map(data => data.sessionState.getSession()!)

@@ -176,6 +176,8 @@ const electronAPI = {
   utils: {
     getTestBookingUrl: () =>
       ipcRenderer.invoke(IPCChannels.utils.getTestBookingUrl),
+    invoke: (channel: string, ...args: any[]) =>
+      ipcRenderer.invoke(channel, ...args),
   },
 
   // Logging services
@@ -234,12 +236,13 @@ const electronAPI = {
       IPCChannels.events.sessionCreated,
       IPCChannels.events.sessionUpdated,
       IPCChannels.events.sessionDeleted,
+      'embedding-service:event', // Allow embedding service events
     ];
 
     if (allowedChannels.includes(channel)) {
       // Wrap callback to forward only the data (not the IPC event object)
       ipcRenderer.on(channel, (ipcEvent, ...args) => {
-        console.log(`[Preload] Received event on channel ${channel}:`, args.length, 'args');
+        console.log(`[Preload] Received event on channel ${channel}:`, args.length, 'args', args);
         // Forward only the data arguments to the callback
         callback(...args);
       });
@@ -256,6 +259,13 @@ const electronAPI = {
   // Send app events to main process
   sendAppEvent: (eventType: string, data: any) => {
     ipcRenderer.send(IPCChannels.events.appEvent, eventType, data);
+  },
+
+  // Forward embedding service events from renderer to main process
+  send: (channel: string, data: any) => {
+    if (channel === 'embedding-service:forward-event') {
+      ipcRenderer.send('embedding-service:forward-event', data);
+    }
   },
 };
 

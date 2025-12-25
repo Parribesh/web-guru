@@ -45,6 +45,10 @@ function printHelp() {
   console.log('  create <url>              Create a new session with URL');
   console.log('  list                      List all sessions');
   console.log('  ask <sessionId> <question> Ask a question to a session');
+  console.log('  chunks <sessionId>         Get chunk count for a session');
+  console.log('  workers                   Show worker pool status');
+  console.log('  pending                   Show pending chunks');
+  console.log('  trigger                   Manually trigger idle workers to process pending chunks');
   console.log('  help                      Show this help message');
   console.log('  exit                      Exit the CLI\n');
   console.log('Examples:');
@@ -136,6 +140,24 @@ async function handleCommand(socket: net.Socket, command: string, args: string[]
           type: 'ask-question',
           sessionId: args[0],
           question: args.slice(1).join(' '),
+        };
+        break;
+
+      case 'chunks':
+        if (args.length === 0) {
+          console.error(colorize('❌ Usage: chunks <sessionId>', 'red'));
+          return;
+        }
+        cliCommand = {
+          type: 'get-chunks',
+          sessionId: args[0],
+        };
+        break;
+
+      case 'embedding':
+      case 'embedding-service':
+        cliCommand = {
+          type: 'embedding-service-status',
         };
         break;
 

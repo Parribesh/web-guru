@@ -1,5 +1,15 @@
 // Main Process Entry Point
 
+// Load environment variables from .env file
+import * as dotenv from 'dotenv';
+import * as path from 'path';
+
+// Load .env file from project root
+const envPath = path.join(process.cwd(), '.env');
+dotenv.config({ path: envPath });
+console.log(`[Config] Loading .env from: ${envPath}`);
+console.log(`[Config] EMBEDDING_BATCH_SIZE: ${process.env.EMBEDDING_BATCH_SIZE || 'not set (using default: 4)'}`);
+
 import { app, BrowserWindow } from 'electron';
 import { setupIPC, getTabManager, getSessionManager } from './ipc';
 import { WindowService } from './windows/WindowService';
@@ -9,11 +19,10 @@ import { setupGlobalShortcuts, unregisterGlobalShortcuts } from './shortcuts';
 import { setMainWindow } from './zoom';
 import { setupCLIServer } from './cli/server';
 import { preventMultipleInstances, setupSecurityHandlers } from './security';
-import { getWorkerPool, shutdownWorkerPool } from './agent/rag/worker-pool';
+import { shutdownEmbeddingService } from './agent/rag/embedding-service';
 
 // Global error handlers for crash reporting
 import * as fs from 'fs';
-import * as path from 'path';
 
 function writeCrashReport(report: any): void {
   try {
@@ -126,14 +135,21 @@ app.on('ready', async () => {
   // Set up CLI server
   setupCLIServer(mainWindow, handleCreateSession);
 
-  // Initialize worker pool early so workers are ready when embeddings are needed
-  // This prevents delays when embedding generation starts
-  eventLogger.info('App', 'Initializing embedding worker pool in background...');
-  getWorkerPool().waitForInitialization().then(() => {
-    eventLogger.success('App', 'Embedding worker pool initialized and ready');
-  }).catch((error) => {
-    eventLogger.error('App', `Failed to initialize worker pool: ${error.message}`);
-    eventLogger.warning('App', 'Embeddings will use fallback processing if worker pool fails');
+  // Initialize session storage (load URL mappings from disk)
+  const { initializeUrlMapping } = require('./agent/rag/session-storage');
+  initializeUrlMapping();
+
+  // Check embedding service availability
+  const { getEmbeddingService } = require('./agent/rag/embedding-service');
+  const embeddingService = getEmbeddingService();
+  embeddingService.healthCheck().then((available: boolean) => {
+    if (available) {
+      eventLogger.success('App', 'Embedding HTTP service is available');
+    } else {
+      eventLogger.warning('App', 'Embedding HTTP service is not available, will use fallback processing');
+    }
+  }).catch((error: any) => {
+    eventLogger.warning('App', `Failed to check embedding service: ${error.message}`);
   });
 
   // Handle app events
@@ -157,12 +173,12 @@ app.on('before-quit', async () => {
   // Unregister global shortcuts
   unregisterGlobalShortcuts();
   
-  // Shutdown worker pool
+  // Shutdown embedding service
   try {
-    await shutdownWorkerPool();
-    eventLogger.info('App', 'Worker pool shut down');
+    shutdownEmbeddingService();
+    eventLogger.info('App', 'Embedding service shut down');
   } catch (error: any) {
-    eventLogger.error('App', `Error shutting down worker pool: ${error.message}`);
+    eventLogger.error('App', `Error shutting down embedding service: ${error.message}`);
   }
 
   // Clean up resources
